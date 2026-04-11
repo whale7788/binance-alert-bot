@@ -1,0 +1,17 @@
+monitor_all = false
+symbols = ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]
+
+check_interval_minutes = 15
+threshold_days = 10
+threshold_refresh_time = "00:05"
+timezone = "UTC"
+
+state_path = "data/state.json"
+log_file = "logs/monitor.log"
+log_level = "INFO"
+
+[telegram]
+# Prefer environment variables for secrets:
+# TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID
+bot_token = ""
+chat_id = ""
