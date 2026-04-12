@@ -20,6 +20,7 @@ def test_state_round_trip(tmp_path) -> None:
     assert loaded.symbols["BTCUSDT"].threshold == 123.45
     assert loaded.symbols["BTCUSDT"].notified is True
     assert loaded.symbols["BTCUSDT"].last_notify_time == "2026-04-11T08:30:00+00:00"
+    assert loaded.symbols["BTCUSDT"].first_breakout_time == "2026-04-11T08:30:00+00:00"
 
 
 def test_needs_refresh_for_new_day_and_missing_symbol() -> None:
@@ -52,3 +53,4 @@ def test_replace_thresholds_resets_notified_state() -> None:
 
     assert state.symbols["BTCUSDT"].notified is False
     assert state.symbols["BTCUSDT"].last_notify_time is None
+    assert state.symbols["BTCUSDT"].first_breakout_time is None

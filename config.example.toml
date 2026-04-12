@@ -15,3 +15,24 @@ log_level = "INFO"
 # TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID
 bot_token = ""
 chat_id = ""
+
+[transfers]
+enabled = false
+poll_interval_seconds = 60
+source = "arkham"
+ignored_assets = ["BTC", "ETH", "SOL", "WBTC", "WETH", "STETH", "CBBTC", "WSOL"]
+auto_blacklist_top_n = 0
+auto_blacklist_stablecoin_variants = true
+auto_blacklist_wrapped_variants = true
+auto_blacklist_staked_variants = true
+
+[transfers.arkham]
+# Prefer environment variable ARKHAM_CLIENT_KEY
+client_key = "gh67j345kl6hj5k432"
+api_base = "https://api.arkm.com"
+min_usd_value = 500000
+limit = 100
+flow = "all"
+
+[[transfers.rules]]
+min_usd_value = 1000000

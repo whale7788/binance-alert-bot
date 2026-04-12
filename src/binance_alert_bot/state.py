@@ -15,6 +15,7 @@ class SymbolState:
     threshold: float
     notified: bool = False
     last_notify_time: str | None = None
+    first_breakout_time: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SymbolState":
@@ -23,6 +24,7 @@ class SymbolState:
             threshold=float(data["threshold"]),
             notified=bool(data.get("notified", False)),
             last_notify_time=data.get("lastNotifyTime"),
+            first_breakout_time=data.get("firstBreakoutTime"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -31,6 +33,7 @@ class SymbolState:
             "threshold": self.threshold,
             "notified": self.notified,
             "lastNotifyTime": self.last_notify_time,
+            "firstBreakoutTime": self.first_breakout_time,
         }
 
 
@@ -79,13 +82,15 @@ class MonitorState:
         self.date = today
         self.last_threshold_refresh_time = refreshed_at.isoformat()
         self.symbols = {
-            symbol: SymbolState(threshold=threshold, notified=False, last_notify_time=None)
+            symbol: SymbolState(threshold=threshold, notified=False, last_notify_time=None, first_breakout_time=None)
             for symbol, threshold in sorted(thresholds.items())
         }
 
     def mark_notified(self, symbol: str, notified_at: datetime) -> None:
         """把某个币种标记为当天已通知。"""
         self.symbols[symbol].notified = True
+        if self.symbols[symbol].first_breakout_time is None:
+            self.symbols[symbol].first_breakout_time = notified_at.isoformat()
         self.symbols[symbol].last_notify_time = notified_at.isoformat()
 
 

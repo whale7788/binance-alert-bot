@@ -162,6 +162,7 @@ class BreakoutMonitor:
                         "symbol": symbol,
                         "current_price": current_price,
                         "threshold": symbol_state.threshold,
+                        "breakout_time": now.isoformat(),
                     }
                 )
             except Exception:
@@ -181,12 +182,13 @@ class BreakoutMonitor:
                         "symbol": symbol,
                         "current_price": self.exchange.get_current_price(symbol),
                         "threshold": symbol_state.threshold,
+                        "breakout_time": symbol_state.first_breakout_time or symbol_state.last_notify_time or "",
                     }
                 )
             except Exception:
                 LOGGER.exception("Failed to refresh current price for already-broken symbol %s", symbol)
 
-        summary_breakouts = todays_breakouts + new_breakouts
+        summary_breakouts = self._sort_breakouts(todays_breakouts + new_breakouts)
 
         if self.notifier.send_breakout_summary(summary_breakouts, now):
             for item in new_breakouts:
@@ -223,3 +225,8 @@ class BreakoutMonitor:
     def _now(self) -> datetime:
         """返回带时区的当前时间，使用配置里的市场时区。"""
         return datetime.now(self.config.zoneinfo)
+
+    @staticmethod
+    def _sort_breakouts(breakouts: list[dict[str, float | str]]) -> list[dict[str, float | str]]:
+        """按首次突破时间升序排序。"""
+        return sorted(breakouts, key=lambda item: str(item.get("breakout_time", "")))

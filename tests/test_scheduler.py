@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 
 from binance_alert_bot.config import AppConfig, TelegramConfig
@@ -156,3 +157,37 @@ def test_new_breakout_summary_includes_symbols_already_broken_today(tmp_path) ->
     assert monitor.state is not None
     assert monitor.state.symbols["BTC-USDT-SWAP"].notified is True
     assert monitor.state.symbols["ETH-USDT-SWAP"].notified is True
+
+
+def test_sort_breakouts_uses_breakout_time_only() -> None:
+    breakouts = [
+        {
+            "status": "今日已突破",
+            "symbol": "B-USDT-SWAP",
+            "current_price": 13.0,
+            "threshold": 10.0,
+            "breakout_time": "2026-04-12T10:00:00+00:00",
+        },
+        {
+            "status": "今日已突破",
+            "symbol": "A-USDT-SWAP",
+            "current_price": 12.0,
+            "threshold": 10.0,
+            "breakout_time": "2026-04-12T09:00:00+00:00",
+        },
+        {
+            "status": "新突破",
+            "symbol": "C-USDT-SWAP",
+            "current_price": 14.0,
+            "threshold": 10.0,
+            "breakout_time": "2026-04-12T10:00:00+00:00",
+        },
+    ]
+
+    sorted_breakouts = BreakoutMonitor._sort_breakouts(breakouts)
+
+    assert [item["symbol"] for item in sorted_breakouts] == [
+        "A-USDT-SWAP",
+        "B-USDT-SWAP",
+        "C-USDT-SWAP",
+    ]

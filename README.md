@@ -64,6 +64,62 @@ binance-alert-bot --config config.toml
 pytest
 ```
 
+## 链上大额转账扩展
+
+项目里已经预留了一套可扩展的链上大额转账骨架，在这些文件下：
+
+- `src/binance_alert_bot/transfers/models.py`
+- `src/binance_alert_bot/transfers/provider.py`
+- `src/binance_alert_bot/transfers/arkham.py`
+- `src/binance_alert_bot/transfers/service.py`
+- `src/binance_alert_bot/transfers/dedup.py`
+
+这套结构是参考 `crypto-transfer` 的思路做的，但拆成了更容易替换数据源的接口层：
+
+- `TransferSource`：统一数据源接口
+- `TransferEvent`：统一转账事件模型
+- `ThresholdRule`：统一阈值规则
+- `DeduplicationCache`：TTL 去重
+- `TransferMonitorService`：负责轮询、规则匹配和去重
+
+后面如果要接：
+
+- Arkham
+- Etherscan
+- TronGrid
+- 自己的 RPC / WebSocket
+
+都可以继续往 `transfers/` 下面加 provider，而不用改通知主流程。
+
+如果要单独运行链上大额转账监控，可以新建配置：
+
+```toml
+[transfers]
+enabled = true
+poll_interval_seconds = 60
+source = "arkham"
+ignored_assets = ["BTC", "ETH", "SOL", "WBTC", "WETH", "STETH", "CBBTC", "WSOL"]
+auto_blacklist_top_n = 0
+auto_blacklist_stablecoin_variants = true
+auto_blacklist_wrapped_variants = true
+auto_blacklist_staked_variants = true
+
+[transfers.arkham]
+client_key = ""
+min_usd_value = 500000
+limit = 100
+flow = "all"
+
+[[transfers.rules]]
+min_usd_value = 1000000
+```
+
+然后使用独立入口：
+
+```powershell
+binance-transfer-bot --config config.toml
+```
+
 ## 状态文件
 
 默认状态文件为 `data/state.json`，结构大致如下：
