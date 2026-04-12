@@ -29,6 +29,8 @@ enabled = true
 poll_interval_seconds = 60
 source = "arkham"
 ignored_assets = ["BTC", "ETH", "SOL", "WBTC", "WETH", "STETH", "CBBTC", "WSOL"]
+only_to_exchanges = true
+exchange_labels = ["BINANCE", "OKX"]
 auto_blacklist_top_n = 0
 auto_blacklist_stablecoin_variants = true
 auto_blacklist_wrapped_variants = true
@@ -53,6 +55,8 @@ min_usd_value = 1000000
     assert config.transfers.enabled is True
     assert config.transfers.arkham.client_key == "arkham-key"
     assert config.transfers.ignored_assets == ["BTC", "ETH", "SOL", "WBTC", "WETH", "STETH", "CBBTC", "WSOL"]
+    assert config.transfers.only_to_exchanges is True
+    assert config.transfers.exchange_labels == ["BINANCE", "OKX"]
     assert config.transfers.auto_blacklist_top_n == 0
     assert config.transfers.auto_blacklist_stablecoin_variants is True
     assert config.transfers.auto_blacklist_wrapped_variants is True

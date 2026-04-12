@@ -37,3 +37,22 @@ def test_transfer_monitor_service_ignores_blacklisted_assets() -> None:
     matches = service.poll()
 
     assert [match.event.asset for match in matches] == ["USDC"]
+
+
+def test_transfer_monitor_service_can_limit_to_exchange_inflows() -> None:
+    exchange_event = make_event("ARB", 2_000_000)
+    object.__setattr__(exchange_event, "to_label", "Binance")
+    wallet_event = make_event("ARB", 2_000_000)
+    object.__setattr__(wallet_event, "to_label", "0x1234...abcd")
+
+    service = TransferMonitorService(
+        source=FakeTransferSource([exchange_event, wallet_event]),
+        rules=[ThresholdRule(min_usd_value=1_000_000)],
+        only_to_exchanges=True,
+        exchange_labels=["BINANCE", "OKX"],
+    )
+
+    matches = service.poll()
+
+    assert len(matches) == 1
+    assert matches[0].event.to_label == "Binance"

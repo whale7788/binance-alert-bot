@@ -23,11 +23,15 @@ class TransferMonitorService:
         source: TransferSource,
         rules: list[ThresholdRule],
         ignored_assets: list[str] | None = None,
+        only_to_exchanges: bool = False,
+        exchange_labels: list[str] | None = None,
         dedup_cache: DeduplicationCache | None = None,
     ) -> None:
         self.source = source
         self.rules = rules
         self.ignored_assets = {asset.upper() for asset in (ignored_assets or [])}
+        self.only_to_exchanges = only_to_exchanges
+        self.exchange_labels = [label.upper() for label in (exchange_labels or [])]
         self.dedup_cache = dedup_cache or DeduplicationCache()
 
     def poll(self) -> list[MatchedTransfer]:
@@ -36,6 +40,8 @@ class TransferMonitorService:
         seen_in_poll: set[str] = set()
         for event in self.source.fetch_recent_transfers():
             if event.asset.upper() in self.ignored_assets:
+                continue
+            if self.only_to_exchanges and not self._is_transfer_to_exchange(event):
                 continue
             if event.dedup_key in seen_in_poll:
                 continue
@@ -47,3 +53,7 @@ class TransferMonitorService:
                     matches.append(MatchedTransfer(event=event, rule=rule))
                     break
         return matches
+
+    def _is_transfer_to_exchange(self, event: TransferEvent) -> bool:
+        label = event.to_label.upper()
+        return any(exchange_label in label for exchange_label in self.exchange_labels)

@@ -73,6 +73,25 @@ class TransfersConfig(BaseModel):
     poll_interval_seconds: int = Field(default=60, ge=10)
     source: str = "arkham"
     ignored_assets: list[str] = Field(default_factory=list)
+    only_to_exchanges: bool = False
+    exchange_labels: list[str] = Field(
+        default_factory=lambda: [
+            "BINANCE",
+            "OKX",
+            "BYBIT",
+            "COINBASE",
+            "KRAKEN",
+            "KUCOIN",
+            "BITGET",
+            "GATE",
+            "GATE.IO",
+            "HTX",
+            "HUOBI",
+            "BITFINEX",
+            "MEXC",
+            "CRYPTO.COM",
+        ]
+    )
     auto_blacklist_top_n: int = Field(default=50, ge=0, le=250)
     auto_blacklist_stablecoin_variants: bool = True
     auto_blacklist_wrapped_variants: bool = True
@@ -89,6 +108,16 @@ class TransfersConfig(BaseModel):
         if not isinstance(value, list):
             raise TypeError("transfers.ignored_assets must be a list")
         return [str(asset).strip().upper() for asset in value if str(asset).strip()]
+
+    @field_validator("exchange_labels", mode="before")
+    @classmethod
+    def normalize_exchange_labels(cls, value: Any) -> list[str]:
+        """把交易所标签关键词规范成大写列表。"""
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise TypeError("transfers.exchange_labels must be a list")
+        return [str(item).strip().upper() for item in value if str(item).strip()]
 
     @model_validator(mode="after")
     def validate_enabled_config(self) -> "TransfersConfig":

@@ -63,7 +63,13 @@ def build_transfer_service(config: AppConfig) -> TransferMonitorService:
         include_wrapped_variants=config.transfers.auto_blacklist_wrapped_variants,
         include_staked_variants=config.transfers.auto_blacklist_staked_variants,
     )
-    return TransferMonitorService(source=source, rules=rules, ignored_assets=ignored_assets)
+    return TransferMonitorService(
+        source=source,
+        rules=rules,
+        ignored_assets=ignored_assets,
+        only_to_exchanges=config.transfers.only_to_exchanges,
+        exchange_labels=config.transfers.exchange_labels,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
