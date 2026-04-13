@@ -32,6 +32,7 @@ Copy-Item config.example.toml config.toml
 monitor_all = false
 symbols = ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]
 check_interval_minutes = 15
+breakout_summary_interval_hours = 4
 threshold_days = 10
 threshold_refresh_time = "00:05"
 timezone = "UTC"

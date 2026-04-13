@@ -46,6 +46,7 @@ def make_config(tmp_path: Path, symbols: list[str] | None = None) -> AppConfig:
         monitor_all=False,
         symbols=symbols or ["BTC-USDT-SWAP"],
         check_interval_minutes=15,
+        breakout_summary_interval_hours=0,
         threshold_days=10,
         threshold_refresh_time="00:05",
         timezone="UTC",
@@ -190,4 +191,24 @@ def test_sort_breakouts_uses_breakout_time_only() -> None:
         "A-USDT-SWAP",
         "B-USDT-SWAP",
         "C-USDT-SWAP",
+    ]
+
+
+def test_periodic_summary_sends_todays_breakouts_without_new_breakouts(tmp_path) -> None:
+    config = make_config(tmp_path)
+    notifier = FakeNotifier(success=True)
+    monitor = BreakoutMonitor(
+        config,
+        FakeExchange(prices={"BTC-USDT-SWAP": 16.0}),
+        notifier,
+        StateStore(config.state_path),
+    )
+    monitor.initialize()
+    monitor.check_prices()
+
+    monitor.send_periodic_summary()
+
+    assert notifier.sent == [
+        [("BTC-USDT-SWAP", "新突破")],
+        [("BTC-USDT-SWAP", "今日已突破")],
     ]

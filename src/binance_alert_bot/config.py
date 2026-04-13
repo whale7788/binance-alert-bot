@@ -141,6 +141,7 @@ class AppConfig(BaseModel):
     monitor_all: bool = False
     symbols: list[str] = Field(default_factory=list)
     check_interval_minutes: int = Field(default=30, ge=1)
+    breakout_summary_interval_hours: int = Field(default=0, ge=0, le=24)
     threshold_days: int = Field(default=10, ge=1)
     threshold_refresh_time: time
     timezone: str = "UTC"

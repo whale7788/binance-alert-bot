@@ -19,7 +19,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 class BreakoutMonitor:
-    """协调币种解析、阈值刷新、价格检查和通知发送。"""
+    """协调阈值刷新、价格检查和通知发送。"""
 
     def __init__(
         self,
@@ -37,7 +37,7 @@ class BreakoutMonitor:
         self.scheduler = BackgroundScheduler(timezone=config.zoneinfo)
 
     def initialize(self) -> None:
-        """在启动调度前准备币种列表和当天状态。"""
+        """启动前准备监控币种和当天状态。"""
         now = self._now()
         self.symbols = self._resolve_symbols()
         if not self.symbols:
@@ -52,7 +52,7 @@ class BreakoutMonitor:
             LOGGER.info("Today's thresholds already exist; skipping startup refresh")
 
     def start(self) -> None:
-        """注册定时任务并启动后台调度器。"""
+        """注册定时任务并启动调度器。"""
         refresh_time = self.config.threshold_refresh_time
         self.scheduler.add_job(
             self.refresh_thresholds,
@@ -67,15 +67,27 @@ class BreakoutMonitor:
             replace_existing=True,
             next_run_time=self._now(),
         )
+        if self.config.breakout_summary_interval_hours > 0:
+            self.scheduler.add_job(
+                self.send_periodic_summary,
+                CronTrigger(
+                    hour=f"*/{self.config.breakout_summary_interval_hours}",
+                    minute=0,
+                    timezone=self.config.zoneinfo,
+                ),
+                id="breakout-summary",
+                replace_existing=True,
+            )
         self.scheduler.start()
         LOGGER.info(
-            "Scheduler started: refresh_time=%s, check_interval_minutes=%d",
+            "Scheduler started: refresh_time=%s, check_interval_minutes=%d, breakout_summary_interval_hours=%d",
             refresh_time.strftime("%H:%M"),
             self.config.check_interval_minutes,
+            self.config.breakout_summary_interval_hours,
         )
 
     def run_forever(self) -> None:
-        """持续运行，直到手动中断。"""
+        """持续运行直到被手动中断。"""
         self.initialize()
         self.start()
         try:
@@ -87,22 +99,20 @@ class BreakoutMonitor:
             self.shutdown()
 
     def shutdown(self) -> None:
-        """停止后台任务并释放网络资源。"""
+        """停止调度器并释放资源。"""
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
         self.exchange.close()
         LOGGER.info("Monitor stopped")
 
     def refresh_thresholds(self) -> None:
-        """为所有监控币种重新计算当天的突破阈值。"""
+        """刷新当天的突破阈值。"""
         now = self._now()
         today = now.date().isoformat()
         LOGGER.info("Refreshing thresholds for %d symbols", len(self.symbols))
 
         if self.config.monitor_all:
             try:
-                # 在 monitor_all 模式下，可交易币种会变化，
-                # 所以刷新阈值前要先更新一次币种范围。
                 self.symbols = self.exchange.get_usdt_perpetual_symbols()
             except Exception:
                 LOGGER.exception("Failed to refresh symbol list")
@@ -124,7 +134,7 @@ class BreakoutMonitor:
         self._save_state("threshold refresh")
 
     def check_prices(self) -> None:
-        """检查每个币种当天是否首次突破，并且只通知一次。"""
+        """检查是否有新的突破，并在有新突破时推送完整名单。"""
         now = self._now()
         today = now.date().isoformat()
         state = self._state()
@@ -137,7 +147,6 @@ class BreakoutMonitor:
         new_breakouts: list[dict[str, float | str]] = []
         for symbol, symbol_state in list(state.symbols.items()):
             try:
-                # 同一币种当天已经通知过，就直接跳过，等下一次日刷新。
                 if symbol_state.notified:
                     continue
                 current_price = self.exchange.get_current_price(symbol)
@@ -171,6 +180,56 @@ class BreakoutMonitor:
         if not new_breakouts:
             return
 
+        summary_breakouts = self._sort_breakouts(self._collect_notified_breakouts(state) + new_breakouts)
+
+        if self.notifier.send_breakout_summary(summary_breakouts, now):
+            for item in new_breakouts:
+                state.mark_notified(str(item["symbol"]), now)
+            self._save_state(f"breakout summary for {len(summary_breakouts)} symbols")
+            LOGGER.info("Breakout summary sent and state updated for %d new symbols", len(new_breakouts))
+        else:
+            LOGGER.error("Breakout summary notification failed; state not marked as notified")
+
+    def send_periodic_summary(self) -> None:
+        """定时推送今日已突破币种的最新涨幅概览。"""
+        now = self._now()
+        today = now.date().isoformat()
+        state = self._state()
+        if state.needs_refresh(today=today, symbols=self.symbols):
+            LOGGER.info("State is stale before periodic summary; refreshing thresholds")
+            self.refresh_thresholds()
+            state = self._state()
+
+        summary_breakouts = self._sort_breakouts(self._collect_notified_breakouts(state))
+        if not summary_breakouts:
+            LOGGER.info("No today's breakouts for periodic summary")
+            return
+
+        if self.notifier.send_breakout_summary(summary_breakouts, now):
+            LOGGER.info("Periodic breakout summary sent for %d symbols", len(summary_breakouts))
+        else:
+            LOGGER.error("Periodic breakout summary notification failed")
+
+    def _resolve_symbols(self) -> list[str]:
+        """按配置返回本次实际要监控的币种。"""
+        if self.config.monitor_all:
+            symbols = self.exchange.get_usdt_perpetual_symbols()
+            LOGGER.info("Monitoring all OKX USDT perpetual symbols: count=%d", len(symbols))
+            return symbols
+        symbols = self.exchange.validate_symbols(self.config.symbols)
+        LOGGER.info("Monitoring configured symbol whitelist: %s", ", ".join(symbols))
+        return symbols
+
+    def _save_state(self, reason: str) -> None:
+        """保存状态，失败时只记日志。"""
+        try:
+            self.state_store.save(self._state())
+            LOGGER.info("State saved after %s", reason)
+        except Exception:
+            LOGGER.exception("Failed to save state after %s", reason)
+
+    def _collect_notified_breakouts(self, state: MonitorState) -> list[dict[str, float | str]]:
+        """收集今天已突破币种的最新价格。"""
         todays_breakouts: list[dict[str, float | str]] = []
         for symbol, symbol_state in list(state.symbols.items()):
             if not symbol_state.notified:
@@ -187,43 +246,16 @@ class BreakoutMonitor:
                 )
             except Exception:
                 LOGGER.exception("Failed to refresh current price for already-broken symbol %s", symbol)
-
-        summary_breakouts = self._sort_breakouts(todays_breakouts + new_breakouts)
-
-        if self.notifier.send_breakout_summary(summary_breakouts, now):
-            for item in new_breakouts:
-                state.mark_notified(str(item["symbol"]), now)
-            self._save_state(f"breakout summary for {len(summary_breakouts)} symbols")
-            LOGGER.info("Breakout summary sent and state updated for %d new symbols", len(new_breakouts))
-        else:
-            LOGGER.error("Breakout summary notification failed; state not marked as notified")
-
-    def _resolve_symbols(self) -> list[str]:
-        """按配置返回这次实际要监控的币种集合。"""
-        if self.config.monitor_all:
-            symbols = self.exchange.get_usdt_perpetual_symbols()
-            LOGGER.info("Monitoring all OKX USDT perpetual symbols: count=%d", len(symbols))
-            return symbols
-        symbols = self.exchange.validate_symbols(self.config.symbols)
-        LOGGER.info("Monitoring configured symbol whitelist: %s", ", ".join(symbols))
-        return symbols
-
-    def _save_state(self, reason: str) -> None:
-        """尽力保存状态，并在失败时记录日志。"""
-        try:
-            self.state_store.save(self._state())
-            LOGGER.info("State saved after %s", reason)
-        except Exception:
-            LOGGER.exception("Failed to save state after %s", reason)
+        return todays_breakouts
 
     def _state(self) -> MonitorState:
-        """按需创建内存中的空状态，方便启动和测试。"""
+        """按需创建内存中的空状态。"""
         if self.state is None:
             self.state = MonitorState.empty(self._now().date().isoformat())
         return self.state
 
     def _now(self) -> datetime:
-        """返回带时区的当前时间，使用配置里的市场时区。"""
+        """返回配置时区下的当前时间。"""
         return datetime.now(self.config.zoneinfo)
 
     @staticmethod

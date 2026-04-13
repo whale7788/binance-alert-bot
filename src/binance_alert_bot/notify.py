@@ -14,7 +14,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 class TelegramNotifier:
-    """负责把突破提醒发送到 Telegram 聊天。"""
+    """负责把突破提醒和链上转账发送到 Telegram。"""
 
     TRANSFER_SUMMARY_MAX_CHARS = 3500
     TRANSFER_SUMMARY_MAX_MATCHES = 50
@@ -24,7 +24,7 @@ class TelegramNotifier:
         self.timeout = timeout
 
     def send_breakout_summary(self, breakouts: list[dict], breakout_time: datetime) -> bool:
-        """发送一条包含今日全部已突破币种的汇总消息。"""
+        """发送突破名单汇总。"""
         if not breakouts:
             return True
 
@@ -38,7 +38,7 @@ class TelegramNotifier:
             for item in new_breakouts:
                 _, percent = breakout_delta(item["current_price"], item["threshold"])
                 lines.append(
-                    f"{item['symbol']}  {item['current_price']:g} > {item['threshold']:g}  (+{percent:.2f}%)"
+                    f"{item['symbol']}  {item['current_price']:g} > {item['threshold']:g}  ({percent:+.2f}%)"
                 )
             lines.append("")
 
@@ -47,7 +47,7 @@ class TelegramNotifier:
             for item in existing_breakouts:
                 _, percent = breakout_delta(item["current_price"], item["threshold"])
                 lines.append(
-                    f"{item['symbol']}  {item['current_price']:g} > {item['threshold']:g}  (+{percent:.2f}%)"
+                    f"{item['symbol']}  {item['current_price']:g} > {item['threshold']:g}  ({percent:+.2f}%)"
                 )
             lines.append("")
 
@@ -55,7 +55,7 @@ class TelegramNotifier:
         return self._send_text(text, f"{len(breakouts)} breakout symbols")
 
     def send_transfer_summary(self, matches: list[MatchedTransfer], observed_at: datetime) -> bool:
-        """发送一条链上大额转账汇总消息。"""
+        """发送链上大额转账汇总。"""
         if not matches:
             return True
 
@@ -75,7 +75,7 @@ class TelegramNotifier:
         return ok
 
     def _format_transfer_section(self, match: MatchedTransfer) -> str:
-        """把单条链上大额转账格式化成消息片段。"""
+        """格式化单条转账记录。"""
         event = match.event
         amount_text = f"{event.amount:g} {event.asset}"
         usd_text = "" if event.usd_value is None else f" (${event.usd_value:,.0f})"
@@ -96,7 +96,7 @@ class TelegramNotifier:
         observed_at: datetime,
         omitted_count: int,
     ) -> list[str]:
-        """按 Telegram 长度限制把转账汇总拆成多条消息。"""
+        """按 Telegram 长度限制拆分转账消息。"""
         header = [f"[链上大额转账] {total_matches}笔", f"时间: {observed_at.strftime('%Y-%m-%d %H:%M:%S %Z')}"]
         suffix = [] if omitted_count <= 0 else ["", f"其余 {omitted_count} 笔已省略"]
         chunks: list[str] = []
