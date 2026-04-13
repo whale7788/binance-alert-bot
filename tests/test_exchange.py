@@ -19,3 +19,21 @@ def test_get_daily_highs_skips_today_unfinished_candle() -> None:
     highs = client.get_daily_highs("BTC-USDT-SWAP", limit=2)
 
     assert highs == [101.0, 102.0]
+
+
+def test_get_daily_highs_uses_utc_daily_candles() -> None:
+    """日线阈值要按 UTC+0 计算，而不是 OKX 默认的 UTC+8 日线。"""
+    client = OkxClient()
+    captured: dict[str, dict[str, str]] = {}
+
+    def fake_get_json(path, params):
+        captured["call"] = {"path": path, **params}
+        return {"code": "0", "data": []}
+
+    client._get_json = fake_get_json  # type: ignore[method-assign]
+
+    client.get_daily_highs("BTC-USDT-SWAP", limit=10)
+
+    assert captured["call"]["path"] == "/api/v5/market/history-candles"
+    assert captured["call"]["bar"] == "1Dutc"
+    assert captured["call"]["limit"] == "11"

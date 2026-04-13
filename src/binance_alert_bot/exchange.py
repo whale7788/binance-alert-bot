@@ -44,7 +44,7 @@ class OkxClient:
         """获取最近已完成日 K 的最高价序列，不包含今天这根未收盘日线。"""
         payload = self._get_json(
             "/api/v5/market/history-candles",
-            params={"instId": self._normalize_symbol(symbol), "bar": "1D", "limit": str(limit + 1)},
+            params={"instId": self._normalize_symbol(symbol), "bar": "1Dutc", "limit": str(limit + 1)},
         )
         candles = payload.get("data", [])
         completed_candles = candles[1 : limit + 1]
