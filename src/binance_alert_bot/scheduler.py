@@ -12,7 +12,7 @@ from .config import AppConfig
 from .exchange import OkxClient
 from .notify import TelegramNotifier
 from .state import MonitorState, StateStore
-from .strategy import calculate_threshold, is_breakout
+from .strategy import breakout_delta, calculate_threshold, is_breakout
 
 
 LOGGER = logging.getLogger(__name__)
@@ -200,7 +200,7 @@ class BreakoutMonitor:
             self.refresh_thresholds()
             state = self._state()
 
-        summary_breakouts = self._sort_breakouts(self._collect_notified_breakouts(state))
+        summary_breakouts = self._sort_breakouts_by_percent(self._collect_notified_breakouts(state))
         if not summary_breakouts:
             LOGGER.info("No today's breakouts for periodic summary")
             return
@@ -214,10 +214,21 @@ class BreakoutMonitor:
         """按配置返回本次实际要监控的币种。"""
         if self.config.monitor_all:
             symbols = self.exchange.get_usdt_perpetual_symbols()
+        else:
+            symbols = self.exchange.validate_symbols(self.config.symbols)
+
+        ignored = {symbol.strip().upper() for symbol in self.config.ignored_symbols}
+        if ignored:
+            filtered = [symbol for symbol in symbols if symbol not in ignored]
+            ignored_count = len(symbols) - len(filtered)
+            if ignored_count:
+                LOGGER.info("Ignored %d configured symbols: %s", ignored_count, ", ".join(sorted(ignored)))
+            symbols = filtered
+
+        if self.config.monitor_all:
             LOGGER.info("Monitoring all OKX USDT perpetual symbols: count=%d", len(symbols))
-            return symbols
-        symbols = self.exchange.validate_symbols(self.config.symbols)
-        LOGGER.info("Monitoring configured symbol whitelist: %s", ", ".join(symbols))
+        else:
+            LOGGER.info("Monitoring configured symbol whitelist: %s", ", ".join(symbols))
         return symbols
 
     def _save_state(self, reason: str) -> None:
@@ -262,3 +273,13 @@ class BreakoutMonitor:
     def _sort_breakouts(breakouts: list[dict[str, float | str]]) -> list[dict[str, float | str]]:
         """按首次突破时间升序排序。"""
         return sorted(breakouts, key=lambda item: str(item.get("breakout_time", "")))
+
+    @staticmethod
+    def _sort_breakouts_by_percent(breakouts: list[dict[str, float | str]]) -> list[dict[str, float | str]]:
+        """按涨幅从高到低排序，涨幅相同时再按首次突破时间升序。"""
+
+        def sort_key(item: dict[str, float | str]) -> tuple[float, str]:
+            _, percent = breakout_delta(float(item["current_price"]), float(item["threshold"]))
+            return (-percent, str(item.get("breakout_time", "")))
+
+        return sorted(breakouts, key=sort_key)

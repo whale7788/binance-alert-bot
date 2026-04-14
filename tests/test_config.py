@@ -16,6 +16,7 @@ def test_example_config_loads_with_telegram_environment(monkeypatch, tmp_path) -
 
     assert config.monitor_all is False
     assert config.symbols == ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]
+    assert config.ignored_symbols == ["INTC-USDT-SWAP", "SNDK-USDT-SWAP", "CRWV-USDT-SWAP"]
     assert config.threshold_days == 10
     assert config.telegram.bot_token == "token"
     assert config.telegram.chat_id == "chat"

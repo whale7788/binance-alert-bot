@@ -1,4 +1,3 @@
-from datetime import datetime
 from pathlib import Path
 
 from binance_alert_bot.config import AppConfig, TelegramConfig
@@ -45,6 +44,7 @@ def make_config(tmp_path: Path, symbols: list[str] | None = None) -> AppConfig:
     return AppConfig(
         monitor_all=False,
         symbols=symbols or ["BTC-USDT-SWAP"],
+        ignored_symbols=[],
         check_interval_minutes=15,
         breakout_summary_interval_hours=0,
         threshold_days=10,
@@ -212,3 +212,57 @@ def test_periodic_summary_sends_todays_breakouts_without_new_breakouts(tmp_path)
         [("BTC-USDT-SWAP", "新突破")],
         [("BTC-USDT-SWAP", "今日已突破")],
     ]
+
+
+def test_periodic_summary_sort_uses_percent_desc() -> None:
+    breakouts = [
+        {
+            "status": "今日已突破",
+            "symbol": "A-USDT-SWAP",
+            "current_price": 11.0,
+            "threshold": 10.0,
+            "breakout_time": "2026-04-12T09:00:00+00:00",
+        },
+        {
+            "status": "今日已突破",
+            "symbol": "B-USDT-SWAP",
+            "current_price": 13.0,
+            "threshold": 10.0,
+            "breakout_time": "2026-04-12T10:00:00+00:00",
+        },
+        {
+            "status": "今日已突破",
+            "symbol": "C-USDT-SWAP",
+            "current_price": 12.0,
+            "threshold": 10.0,
+            "breakout_time": "2026-04-12T08:00:00+00:00",
+        },
+    ]
+
+    sorted_breakouts = BreakoutMonitor._sort_breakouts_by_percent(breakouts)
+
+    assert [item["symbol"] for item in sorted_breakouts] == [
+        "B-USDT-SWAP",
+        "C-USDT-SWAP",
+        "A-USDT-SWAP",
+    ]
+
+
+def test_resolve_symbols_excludes_ignored_symbols(tmp_path) -> None:
+    config = AppConfig(
+        monitor_all=False,
+        symbols=["BTC-USDT-SWAP", "INTC-USDT-SWAP", "SNDK-USDT-SWAP"],
+        ignored_symbols=["INTC-USDT-SWAP", "SNDK-USDT-SWAP"],
+        check_interval_minutes=15,
+        breakout_summary_interval_hours=0,
+        threshold_days=10,
+        threshold_refresh_time="00:05",
+        timezone="UTC",
+        state_path=tmp_path / "state.json",
+        log_file=tmp_path / "monitor.log",
+        log_level="INFO",
+        telegram=TelegramConfig(bot_token="token", chat_id="chat"),
+    )
+    monitor = BreakoutMonitor(config, FakeExchange(), FakeNotifier(), StateStore(config.state_path))
+
+    assert monitor._resolve_symbols() == ["BTC-USDT-SWAP"]

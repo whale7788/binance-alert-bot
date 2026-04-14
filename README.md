@@ -31,6 +31,7 @@ Copy-Item config.example.toml config.toml
 ```toml
 monitor_all = false
 symbols = ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]
+ignored_symbols = ["INTC-USDT-SWAP", "SNDK-USDT-SWAP", "CRWV-USDT-SWAP"]
 check_interval_minutes = 15
 breakout_summary_interval_hours = 4
 threshold_days = 10
