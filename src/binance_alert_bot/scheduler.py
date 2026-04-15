@@ -180,12 +180,10 @@ class BreakoutMonitor:
         if not new_breakouts:
             return
 
-        summary_breakouts = self._sort_breakouts(self._collect_notified_breakouts(state) + new_breakouts)
-
-        if self.notifier.send_breakout_summary(summary_breakouts, now):
+        if self.notifier.send_breakout_summary(self._sort_breakouts(new_breakouts), now):
             for item in new_breakouts:
                 state.mark_notified(str(item["symbol"]), now)
-            self._save_state(f"breakout summary for {len(summary_breakouts)} symbols")
+            self._save_state(f"breakout summary for {len(new_breakouts)} symbols")
             LOGGER.info("Breakout summary sent and state updated for %d new symbols", len(new_breakouts))
         else:
             LOGGER.error("Breakout summary notification failed; state not marked as notified")

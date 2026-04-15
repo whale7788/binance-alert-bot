@@ -140,7 +140,7 @@ def test_multiple_breakouts_are_sent_in_one_summary(tmp_path) -> None:
     assert monitor.state.symbols["ETH-USDT-SWAP"].notified is True
 
 
-def test_new_breakout_summary_includes_symbols_already_broken_today(tmp_path) -> None:
+def test_new_breakout_summary_does_not_include_symbols_already_broken_today(tmp_path) -> None:
     config = make_config(tmp_path, symbols=["BTC-USDT-SWAP", "ETH-USDT-SWAP"])
     notifier = FakeNotifier(success=True)
     exchange = FakeExchange(prices={"BTC-USDT-SWAP": 16.0, "ETH-USDT-SWAP": 9.0})
@@ -153,7 +153,7 @@ def test_new_breakout_summary_includes_symbols_already_broken_today(tmp_path) ->
 
     assert notifier.sent == [
         [("BTC-USDT-SWAP", "新突破")],
-        [("BTC-USDT-SWAP", "今日已突破"), ("ETH-USDT-SWAP", "新突破")],
+        [("ETH-USDT-SWAP", "新突破")],
     ]
     assert monitor.state is not None
     assert monitor.state.symbols["BTC-USDT-SWAP"].notified is True
