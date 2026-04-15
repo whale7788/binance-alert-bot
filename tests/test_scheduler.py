@@ -21,8 +21,8 @@ class FakeExchange:
         available = set(self.get_usdt_perpetual_symbols())
         return [symbol for symbol in requested_symbols if symbol in available]
 
-    def get_daily_highs(self, symbol: str, limit: int = 10) -> list[float]:
-        return [float(value) for value in range(1, limit + 1)]
+    def get_threshold_reference_prices(self, symbol: str, days: int = 10) -> list[float]:
+        return [float(value) for value in range(1, days + 1)]
 
     def get_current_price(self, symbol: str) -> float:
         if symbol == self.failing_price_symbol:

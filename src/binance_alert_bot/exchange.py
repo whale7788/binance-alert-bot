@@ -9,7 +9,9 @@ LOGGER = logging.getLogger(__name__)
 
 
 class OkxClient:
-    """对 OKX 永续合约 HTTP API 的一层轻量封装。"""
+    """OKX 永续合约 HTTP API 轻量封装。"""
+
+    FOUR_HOURS_PER_DAY = 6
 
     def __init__(self, base_url: str = "https://www.okx.com", timeout: float = 20.0) -> None:
         self.base_url = base_url.rstrip("/")
@@ -40,15 +42,16 @@ class OkxClient:
                 LOGGER.warning("Symbol %s is not a live OKX USDT perpetual swap; skipping", symbol)
         return valid
 
-    def get_daily_highs(self, symbol: str, limit: int = 15) -> list[float]:
-        """获取最近已完成日 K 的最高价序列，不包含今天这根未收盘日线。"""
+    def get_threshold_reference_prices(self, symbol: str, days: int = 10) -> list[float]:
+        """返回过去 N 天内已完成 4 小时 K 线的收盘价序列，不包含当前未完成 K 线。"""
+        bars = max(days, 1) * self.FOUR_HOURS_PER_DAY
         payload = self._get_json(
             "/api/v5/market/history-candles",
-            params={"instId": self._normalize_symbol(symbol), "bar": "1Dutc", "limit": str(limit + 1)},
+            params={"instId": self._normalize_symbol(symbol), "bar": "4H", "limit": str(bars + 1)},
         )
         candles = payload.get("data", [])
-        completed_candles = candles[1 : limit + 1]
-        return [float(candle[2]) for candle in completed_candles]
+        completed_candles = candles[1 : bars + 1]
+        return [float(candle[4]) for candle in completed_candles]
 
     def get_current_price(self, symbol: str) -> float:
         """获取某个币种的最新成交价。"""

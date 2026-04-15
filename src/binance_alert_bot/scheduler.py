@@ -120,8 +120,8 @@ class BreakoutMonitor:
         thresholds: dict[str, float] = {}
         for symbol in self.symbols:
             try:
-                highs = self.exchange.get_daily_highs(symbol, limit=self.config.threshold_days)
-                thresholds[symbol] = calculate_threshold(highs)
+                prices = self.exchange.get_threshold_reference_prices(symbol, days=self.config.threshold_days)
+                thresholds[symbol] = calculate_threshold(prices)
                 LOGGER.info("Threshold refreshed: symbol=%s threshold=%s", symbol, thresholds[symbol])
             except Exception:
                 LOGGER.exception("Failed to refresh threshold for %s; skipping this symbol", symbol)
