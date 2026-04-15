@@ -23,7 +23,7 @@ def test_state_round_trip(tmp_path) -> None:
     assert loaded.symbols["BTCUSDT"].first_breakout_time == "2026-04-11T08:30:00+00:00"
 
 
-def test_needs_refresh_for_new_day_and_missing_symbol() -> None:
+def test_needs_refresh_for_new_day_missing_symbol_and_extra_symbol() -> None:
     state = MonitorState.empty("2026-04-11")
     state.replace_thresholds(
         today="2026-04-11",
@@ -34,6 +34,13 @@ def test_needs_refresh_for_new_day_and_missing_symbol() -> None:
     assert state.needs_refresh("2026-04-12", ["BTCUSDT"]) is True
     assert state.needs_refresh("2026-04-11", ["BTCUSDT", "ETHUSDT"]) is True
     assert state.needs_refresh("2026-04-11", ["BTCUSDT"]) is False
+
+    state.replace_thresholds(
+        today="2026-04-11",
+        refreshed_at=datetime.fromisoformat("2026-04-11T00:05:00+00:00"),
+        thresholds={"BTCUSDT": 123.45, "INTCUSDT": 50.0},
+    )
+    assert state.needs_refresh("2026-04-11", ["BTCUSDT"]) is True
 
 
 def test_replace_thresholds_resets_notified_state() -> None:

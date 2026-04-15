@@ -113,7 +113,7 @@ class BreakoutMonitor:
 
         if self.config.monitor_all:
             try:
-                self.symbols = self.exchange.get_usdt_perpetual_symbols()
+                self.symbols = self._apply_ignored_symbols(self.exchange.get_usdt_perpetual_symbols())
             except Exception:
                 LOGGER.exception("Failed to refresh symbol list")
 
@@ -217,19 +217,25 @@ class BreakoutMonitor:
         else:
             symbols = self.exchange.validate_symbols(self.config.symbols)
 
-        ignored = {symbol.strip().upper() for symbol in self.config.ignored_symbols}
-        if ignored:
-            filtered = [symbol for symbol in symbols if symbol not in ignored]
-            ignored_count = len(symbols) - len(filtered)
-            if ignored_count:
-                LOGGER.info("Ignored %d configured symbols: %s", ignored_count, ", ".join(sorted(ignored)))
-            symbols = filtered
+        symbols = self._apply_ignored_symbols(symbols)
 
         if self.config.monitor_all:
             LOGGER.info("Monitoring all OKX USDT perpetual symbols: count=%d", len(symbols))
         else:
             LOGGER.info("Monitoring configured symbol whitelist: %s", ", ".join(symbols))
         return symbols
+
+    def _apply_ignored_symbols(self, symbols: list[str]) -> list[str]:
+        """从候选合约中排除配置里的忽略名单。"""
+        ignored = {symbol.strip().upper() for symbol in self.config.ignored_symbols}
+        if not ignored:
+            return symbols
+
+        filtered = [symbol for symbol in symbols if symbol not in ignored]
+        ignored_count = len(symbols) - len(filtered)
+        if ignored_count:
+            LOGGER.info("Ignored %d configured symbols: %s", ignored_count, ", ".join(sorted(ignored)))
+        return filtered
 
     def _save_state(self, reason: str) -> None:
         """保存状态，失败时只记日志。"""

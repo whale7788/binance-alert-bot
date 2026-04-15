@@ -19,7 +19,7 @@ class SymbolState:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SymbolState":
-        """从磁盘上的 JSON 结构恢复 SymbolState。"""
+        """从 JSON 结构恢复 SymbolState。"""
         return cls(
             threshold=float(data["threshold"]),
             notified=bool(data.get("notified", False)),
@@ -28,7 +28,7 @@ class SymbolState:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """把 SymbolState 序列化回磁盘使用的 JSON 结构。"""
+        """把 SymbolState 序列化成 JSON 结构。"""
         return {
             "threshold": self.threshold,
             "notified": self.notified,
@@ -39,7 +39,7 @@ class SymbolState:
 
 @dataclass
 class MonitorState:
-    """当前交易日的全部持久化状态。"""
+    """当前交易日的持久化状态。"""
 
     date: str
     last_threshold_refresh_time: str | None = None
@@ -52,7 +52,7 @@ class MonitorState:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "MonitorState":
-        """从 JSON 文件内容解析监控状态。"""
+        """从 JSON 内容解析监控状态。"""
         symbols = {
             symbol.upper(): SymbolState.from_dict(symbol_data)
             for symbol, symbol_data in data.get("symbols", {}).items()
@@ -64,7 +64,7 @@ class MonitorState:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """把监控状态序列化成稳定且可读的 JSON 数据。"""
+        """把监控状态序列化成 JSON 数据。"""
         return {
             "date": self.date,
             "lastThresholdRefreshTime": self.last_threshold_refresh_time,
@@ -72,10 +72,12 @@ class MonitorState:
         }
 
     def needs_refresh(self, today: str, symbols: list[str]) -> bool:
-        """当天日期变化或缺少币种阈值时，需要重新刷新。"""
+        """日期变化、缺少 symbol，或残留旧 symbol 时都需要刷新。"""
         if self.date != today:
             return True
-        return any(symbol not in self.symbols for symbol in symbols)
+        expected = {symbol.upper() for symbol in symbols}
+        current = set(self.symbols.keys())
+        return current != expected
 
     def replace_thresholds(self, today: str, refreshed_at: datetime, thresholds: dict[str, float]) -> None:
         """替换当天全部阈值，并重置通知标记。"""
@@ -101,7 +103,7 @@ class StateStore:
         self.path = path
 
     def load(self, today: str) -> MonitorState:
-        """如果状态文件存在就读取，否则返回今天的空状态。"""
+        """读取状态文件；不存在时返回当天空状态。"""
         if not self.path.exists():
             return MonitorState.empty(today)
         with self.path.open("r", encoding="utf-8") as handle:
@@ -109,7 +111,7 @@ class StateStore:
         return MonitorState.from_dict(data)
 
     def save(self, state: MonitorState) -> None:
-        """用原子写入方式保存状态，避免写到一半把 JSON 弄坏。"""
+        """用原子写入方式保存状态。"""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = self.path.with_name(f"{self.path.name}.tmp")
         with temp_path.open("w", encoding="utf-8") as handle:

@@ -266,3 +266,25 @@ def test_resolve_symbols_excludes_ignored_symbols(tmp_path) -> None:
     monitor = BreakoutMonitor(config, FakeExchange(), FakeNotifier(), StateStore(config.state_path))
 
     assert monitor._resolve_symbols() == ["BTC-USDT-SWAP"]
+
+
+def test_refresh_thresholds_reapplies_ignored_symbols_in_monitor_all_mode(tmp_path) -> None:
+    config = AppConfig(
+        monitor_all=True,
+        symbols=[],
+        ignored_symbols=["INTC-USDT-SWAP"],
+        check_interval_minutes=15,
+        breakout_summary_interval_hours=0,
+        threshold_days=10,
+        threshold_refresh_time="00:05",
+        timezone="UTC",
+        state_path=tmp_path / "state.json",
+        log_file=tmp_path / "monitor.log",
+        log_level="INFO",
+        telegram=TelegramConfig(bot_token="token", chat_id="chat"),
+    )
+    monitor = BreakoutMonitor(config, FakeExchange(), FakeNotifier(), StateStore(config.state_path))
+
+    monitor.initialize()
+
+    assert "INTC-USDT-SWAP" not in monitor.symbols
