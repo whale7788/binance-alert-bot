@@ -30,29 +30,36 @@ class TelegramNotifier:
 
         new_breakouts = [item for item in breakouts if item.get("status") == "新突破"]
         existing_breakouts = [item for item in breakouts if item.get("status") != "新突破"]
+        ordinal_by_symbol = self._build_breakout_ordinals(breakouts)
 
         lines = [f"[突破名单] {len(breakouts)}个", ""]
 
         if new_breakouts:
             lines.append("新突破")
             for item in new_breakouts:
-                _, percent = breakout_delta(item["current_price"], item["threshold"])
-                lines.append(
-                    f"{item['symbol']}  {item['current_price']:g} > {item['threshold']:g}  ({percent:+.2f}%)"
-                )
+                lines.append(self._format_breakout_line(item, ordinal=ordinal_by_symbol.get(str(item["symbol"]))))
             lines.append("")
 
         if existing_breakouts:
             lines.append("今日已突破")
             for item in existing_breakouts:
-                _, percent = breakout_delta(item["current_price"], item["threshold"])
-                lines.append(
-                    f"{item['symbol']}  {item['current_price']:g} > {item['threshold']:g}  ({percent:+.2f}%)"
-                )
+                lines.append(self._format_breakout_line(item, ordinal=ordinal_by_symbol.get(str(item["symbol"]))))
             lines.append("")
 
         text = "\n".join(lines).strip()
         return self._send_text(text, f"{len(breakouts)} breakout symbols")
+
+    def _format_breakout_line(self, item: dict, ordinal: int | None = None) -> str:
+        _, percent = breakout_delta(item["current_price"], item["threshold"])
+        prefix = "" if ordinal is None else f"[第{ordinal}个突破] "
+        return f"{prefix}{item['symbol']}  {item['current_price']:g} > {item['threshold']:g}  ({percent:+.2f}%)"
+
+    def _build_breakout_ordinals(self, breakouts: list[dict]) -> dict[str, int]:
+        ordered = sorted(
+            breakouts,
+            key=lambda item: (str(item.get("breakout_time", "")), str(item.get("symbol", ""))),
+        )
+        return {str(item["symbol"]): index for index, item in enumerate(ordered, start=1)}
 
     def send_transfer_summary(self, matches: list[MatchedTransfer], observed_at: datetime) -> bool:
         """发送链上大额转账汇总。"""
