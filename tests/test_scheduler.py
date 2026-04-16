@@ -34,9 +34,13 @@ class FakeNotifier:
     def __init__(self, success: bool = True) -> None:
         self.success = success
         self.sent: list[list[tuple[str, str]]] = []
+        self.sent_with_ordinals: list[list[tuple[str, str, int | None]]] = []
 
     def send_breakout_summary(self, breakouts, breakout_time) -> bool:
         self.sent.append([(item["symbol"], item["status"]) for item in breakouts])
+        self.sent_with_ordinals.append(
+            [(item["symbol"], item["status"], item.get("breakout_ordinal")) for item in breakouts]
+        )
         return self.success
 
 
@@ -158,6 +162,24 @@ def test_new_breakout_summary_does_not_include_symbols_already_broken_today(tmp_
     assert monitor.state is not None
     assert monitor.state.symbols["BTC-USDT-SWAP"].notified is True
     assert monitor.state.symbols["ETH-USDT-SWAP"].notified is True
+
+
+def test_new_breakout_ordinals_accumulate_across_notifications(tmp_path) -> None:
+    config = make_config(tmp_path, symbols=["BTC-USDT-SWAP", "ETH-USDT-SWAP"])
+    notifier = FakeNotifier(success=True)
+    exchange = FakeExchange(prices={"BTC-USDT-SWAP": 16.0, "ETH-USDT-SWAP": 9.0})
+    monitor = BreakoutMonitor(config, exchange, notifier, StateStore(config.state_path))
+    monitor.initialize()
+
+    monitor.check_prices()
+
+    exchange.prices = {"BTC-USDT-SWAP": 18.0, "ETH-USDT-SWAP": 16.0}
+    monitor.check_prices()
+
+    assert notifier.sent_with_ordinals[0][0][0] == "BTC-USDT-SWAP"
+    assert notifier.sent_with_ordinals[0][0][2] == 1
+    assert notifier.sent_with_ordinals[1][0][0] == "ETH-USDT-SWAP"
+    assert notifier.sent_with_ordinals[1][0][2] == 2
 
 
 def test_sort_breakouts_uses_breakout_time_only() -> None:

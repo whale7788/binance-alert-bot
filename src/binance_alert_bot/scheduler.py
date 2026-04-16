@@ -144,7 +144,7 @@ class BreakoutMonitor:
             state = self._state()
 
         LOGGER.info("Checking prices for %d symbols", len(state.symbols))
-        new_breakouts: list[dict[str, float | str]] = []
+        new_breakouts: list[dict[str, float | str | int]] = []
         for symbol, symbol_state in list(state.symbols.items()):
             try:
                 if symbol_state.notified:
@@ -180,7 +180,13 @@ class BreakoutMonitor:
         if not new_breakouts:
             return
 
-        if self.notifier.send_breakout_summary(self._sort_breakouts(new_breakouts), now):
+        todays_breakout_count = sum(1 for symbol_state in state.symbols.values() if symbol_state.notified)
+        notification_breakouts = self._assign_breakout_ordinals(
+            self._sort_breakouts(new_breakouts),
+            start=todays_breakout_count + 1,
+        )
+
+        if self.notifier.send_breakout_summary(notification_breakouts, now):
             for item in new_breakouts:
                 state.mark_notified(str(item["symbol"]), now)
             self._save_state(f"breakout summary for {len(new_breakouts)} symbols")
@@ -203,6 +209,7 @@ class BreakoutMonitor:
             LOGGER.info("No today's breakouts for periodic summary")
             return
 
+        summary_breakouts = self._assign_breakout_ordinals(summary_breakouts)
         if self.notifier.send_breakout_summary(summary_breakouts, now):
             LOGGER.info("Periodic breakout summary sent for %d symbols", len(summary_breakouts))
         else:
@@ -287,3 +294,18 @@ class BreakoutMonitor:
             return (-percent, str(item.get("breakout_time", "")))
 
         return sorted(breakouts, key=sort_key)
+
+    @staticmethod
+    def _assign_breakout_ordinals(
+        breakouts: list[dict[str, float | str]],
+        start: int = 1,
+    ) -> list[dict[str, float | str | int]]:
+        """在不改变当前展示顺序的前提下，为每条记录补上当天累计突破序号。"""
+        order_by_symbol = {
+            str(item["symbol"]): index
+            for index, item in enumerate(
+                sorted(breakouts, key=lambda item: (str(item.get("breakout_time", "")), str(item.get("symbol", "")))),
+                start=start,
+            )
+        }
+        return [{**item, "breakout_ordinal": order_by_symbol[str(item["symbol"])]} for item in breakouts]

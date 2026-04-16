@@ -171,6 +171,7 @@ def test_telegram_notifier_adds_breakout_ordinal_for_all_breakout_lines(monkeypa
                     "threshold": 100.0,
                     "status": "新突破",
                     "breakout_time": "2026-04-11T08:30:00+00:00",
+                    "breakout_ordinal": 1,
                 },
                 {
                     "symbol": "ETH-USDT-SWAP",
@@ -178,6 +179,7 @@ def test_telegram_notifier_adds_breakout_ordinal_for_all_breakout_lines(monkeypa
                     "threshold": 200.0,
                     "status": "新突破",
                     "breakout_time": "2026-04-11T08:31:00+00:00",
+                    "breakout_ordinal": 2,
                 },
                 {
                     "symbol": "AAVE-USDT-SWAP",
@@ -185,6 +187,7 @@ def test_telegram_notifier_adds_breakout_ordinal_for_all_breakout_lines(monkeypa
                     "threshold": 97.98,
                     "status": "今日已突破",
                     "breakout_time": "2026-04-11T08:32:00+00:00",
+                    "breakout_ordinal": 3,
                 },
             ],
             datetime(2026, 4, 11, 8, 30),
@@ -217,6 +220,7 @@ def test_telegram_notifier_keeps_display_order_but_uses_first_breakout_ordinal(m
                     "threshold": 10.0,
                     "status": "今日已突破",
                     "breakout_time": "2026-04-11T09:00:00+00:00",
+                    "breakout_ordinal": 2,
                 },
                 {
                     "symbol": "A-USDT-SWAP",
@@ -224,6 +228,7 @@ def test_telegram_notifier_keeps_display_order_but_uses_first_breakout_ordinal(m
                     "threshold": 10.0,
                     "status": "今日已突破",
                     "breakout_time": "2026-04-11T08:00:00+00:00",
+                    "breakout_ordinal": 1,
                 },
             ],
             datetime(2026, 4, 11, 10, 0),
