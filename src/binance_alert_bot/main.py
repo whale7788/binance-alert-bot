@@ -4,6 +4,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+from logging.handlers import TimedRotatingFileHandler
 
 from pydantic import ValidationError
 
@@ -23,7 +24,15 @@ def setup_logging(log_file: Path, log_level: str) -> None:
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
 
-    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    file_handler = TimedRotatingFileHandler(
+        log_file,
+        when="midnight",
+        interval=1,
+        backupCount=14,
+        encoding="utf-8",
+        utc=False,
+    )
+    file_handler.suffix = "%Y-%m-%d"
     file_handler.setFormatter(formatter)
 
     root = logging.getLogger()

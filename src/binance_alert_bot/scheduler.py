@@ -128,6 +128,16 @@ class BreakoutMonitor:
             LOGGER.error("No thresholds were refreshed; keeping previous state")
             return
 
+        sorted_thresholds = sorted(thresholds.items(), key=lambda item: item[1], reverse=True)
+        sample = ", ".join(f"{symbol}={threshold:g}" for symbol, threshold in sorted_thresholds[:5])
+        LOGGER.info(
+            "Threshold refresh complete: refreshed=%d failed=%d utc_day=%s sample_top_thresholds=%s",
+            len(thresholds),
+            len(self.symbols) - len(thresholds),
+            today,
+            sample or "n/a",
+        )
+
         self._state().replace_thresholds(today=today, refreshed_at=now, thresholds=thresholds)
         self._save_state("threshold refresh")
 
@@ -139,26 +149,43 @@ class BreakoutMonitor:
 
         LOGGER.info("Checking prices for %d symbols", len(state.symbols))
         current_prices = self.exchange.get_current_prices(state.symbols.keys())
+        missing_prices = sorted(set(state.symbols.keys()) - set(current_prices.keys()))
+        if missing_prices:
+            LOGGER.warning(
+                "Missing current prices for %d symbols during price check; sample=%s",
+                len(missing_prices),
+                ", ".join(missing_prices[:10]),
+            )
         new_breakouts: list[dict[str, float | str | int]] = []
+        compared_count = 0
         for symbol, symbol_state in list(state.symbols.items()):
             try:
                 if symbol_state.notified:
                     continue
-                current_price = current_prices[symbol]
-                if not is_breakout(current_price, symbol_state.threshold):
-                    LOGGER.debug(
-                        "No breakout: symbol=%s current_price=%s threshold=%s",
-                        symbol,
-                        current_price,
-                        symbol_state.threshold,
-                    )
+                if symbol not in current_prices:
                     continue
-
-                LOGGER.info(
-                    "Breakout detected: symbol=%s current_price=%s threshold=%s",
+                current_price = current_prices[symbol]
+                compared_count += 1
+                delta, percent = breakout_delta(current_price, symbol_state.threshold)
+                LOGGER.debug(
+                    "Price check: symbol=%s current=%g threshold=%g delta=%+.6g pct=%+.2f notified=%s",
                     symbol,
                     current_price,
                     symbol_state.threshold,
+                    delta,
+                    percent,
+                    symbol_state.notified,
+                )
+                if not is_breakout(current_price, symbol_state.threshold):
+                    continue
+
+                LOGGER.info(
+                    "Breakout detected: symbol=%s current_price=%g threshold=%g delta=%+.6g pct=%+.2f",
+                    symbol,
+                    current_price,
+                    symbol_state.threshold,
+                    delta,
+                    percent,
                 )
                 new_breakouts.append(
                     {
@@ -172,6 +199,14 @@ class BreakoutMonitor:
             except Exception:
                 LOGGER.exception("Failed to process %s; continuing with remaining symbols", symbol)
 
+        LOGGER.info(
+            "Price check complete: total_symbols=%d compared=%d already_notified=%d missing_prices=%d new_breakouts=%d",
+            len(state.symbols),
+            compared_count,
+            sum(1 for symbol_state in state.symbols.values() if symbol_state.notified),
+            len(missing_prices),
+            len(new_breakouts),
+        )
         if not new_breakouts:
             return
 
@@ -200,6 +235,15 @@ class BreakoutMonitor:
             LOGGER.info("No today's breakouts for periodic summary")
             return
 
+        top_sample = ", ".join(
+            f"{item['symbol']}({breakout_delta(float(item['current_price']), float(item['threshold']))[1]:+.2f}%)"
+            for item in summary_breakouts[:5]
+        )
+        LOGGER.info(
+            "Preparing periodic breakout summary: symbols=%d top_sample=%s",
+            len(summary_breakouts),
+            top_sample or "n/a",
+        )
         summary_breakouts = self._assign_breakout_ordinals(summary_breakouts)
         if self.notifier.send_breakout_summary(summary_breakouts, now):
             LOGGER.info("Periodic breakout summary sent for %d symbols", len(summary_breakouts))
@@ -245,10 +289,21 @@ class BreakoutMonitor:
         """收集今天已突破币种的最新价格。"""
         todays_breakouts: list[dict[str, float | str]] = []
         current_prices = self.exchange.get_current_prices(state.symbols.keys())
+        missing_prices = sorted(
+            symbol for symbol, symbol_state in state.symbols.items() if symbol_state.notified and symbol not in current_prices
+        )
+        if missing_prices:
+            LOGGER.warning(
+                "Missing current prices for %d already-broken symbols; sample=%s",
+                len(missing_prices),
+                ", ".join(missing_prices[:10]),
+            )
         for symbol, symbol_state in list(state.symbols.items()):
             if not symbol_state.notified:
                 continue
             try:
+                if symbol not in current_prices:
+                    continue
                 current_price = current_prices[symbol]
                 todays_breakouts.append(
                     {

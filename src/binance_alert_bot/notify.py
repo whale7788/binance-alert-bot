@@ -163,7 +163,19 @@ class TelegramNotifier:
             ok = bool(payload.get("ok", False))
             if not ok:
                 LOGGER.error("Telegram returned non-ok response for %s: %s", context, payload)
+            else:
+                LOGGER.info("Telegram alert sent for %s chars=%d", context, len(text))
             return ok
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text[:500]
+            LOGGER.error(
+                "Telegram request failed for %s status=%d body=%s",
+                context,
+                exc.response.status_code,
+                body,
+            )
+            LOGGER.exception("Failed to send Telegram alert for %s", context)
+            return False
         except Exception:
             LOGGER.exception("Failed to send Telegram alert for %s", context)
             return False

@@ -99,6 +99,12 @@ class OkxClient:
                 return payload
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code
+                if status_code == 451:
+                    LOGGER.error(
+                        "OKX request blocked with HTTP 451 for path=%s params=%s; check region or IP restrictions",
+                        path,
+                        params,
+                    )
                 if attempt == self.max_retries or status_code not in self.RETRYABLE_STATUS_CODES:
                     raise
                 self._sleep_before_retry(path, params, attempt, f"status={status_code}")
@@ -218,6 +224,12 @@ class BinanceFuturesClient:
                 return payload
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code
+                if status_code == 451:
+                    LOGGER.error(
+                        "Binance request blocked with HTTP 451 for path=%s params=%s; check region or IP restrictions",
+                        path,
+                        params,
+                    )
                 if attempt == self.max_retries or status_code not in self.RETRYABLE_STATUS_CODES:
                     raise
                 self._sleep_before_retry(path, params, attempt, f"status={status_code}")
