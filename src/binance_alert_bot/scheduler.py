@@ -10,7 +10,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from .config import AppConfig
-from .exchange import BinanceFuturesClient
+from .exchange import ExchangeClient
 from .notify import TelegramNotifier
 from .state import MonitorState, StateStore
 from .strategy import breakout_delta, calculate_threshold, is_breakout
@@ -26,7 +26,7 @@ class BreakoutMonitor:
     def __init__(
         self,
         config: AppConfig,
-        exchange: BinanceFuturesClient,
+        exchange: ExchangeClient,
         notifier: TelegramNotifier,
         state_store: StateStore,
     ) -> None:

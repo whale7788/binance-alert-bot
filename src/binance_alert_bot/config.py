@@ -138,6 +138,7 @@ class AppConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    exchange: str = "okx"
     monitor_all: bool = False
     symbols: list[str] = Field(default_factory=list)
     ignored_symbols: list[str] = Field(default_factory=list)
@@ -188,6 +189,15 @@ class AppConfig(BaseModel):
         if level not in valid:
             raise ValueError(f"log_level must be one of {sorted(valid)}")
         return level
+
+    @field_validator("exchange")
+    @classmethod
+    def normalize_exchange(cls, value: str) -> str:
+        exchange = value.strip().lower()
+        valid = {"okx", "binance"}
+        if exchange not in valid:
+            raise ValueError(f"exchange must be one of {sorted(valid)}")
+        return exchange
 
     @model_validator(mode="after")
     def validate_monitor_scope(self) -> "AppConfig":

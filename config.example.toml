@@ -1,3 +1,5 @@
+exchange = "okx"
+# Set to "binance" to use Binance U-margined perpetual futures.
 monitor_all = false
 symbols = ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]
 ignored_symbols = ["INTC-USDT-SWAP", "SNDK-USDT-SWAP", "CRWV-USDT-SWAP"]

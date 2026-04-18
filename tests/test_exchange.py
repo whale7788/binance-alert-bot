@@ -1,6 +1,6 @@
 import httpx
 
-from binance_alert_bot.exchange import BinanceFuturesClient
+from binance_alert_bot.exchange import BinanceFuturesClient, OkxClient
 
 
 def test_get_daily_highs_skips_today_unfinished_candle() -> None:
@@ -100,3 +100,43 @@ def test_get_json_does_not_retry_on_non_retryable_status(monkeypatch) -> None:
 
     assert calls["count"] == 1
     assert sleeps == []
+
+
+def test_okx_get_daily_highs_skips_today_unfinished_candle() -> None:
+    client = OkxClient()
+    payload = {
+        "code": "0",
+        "data": [
+            ["today", "0", "999.0", "0", "0", "0", "0", "0", "0"],
+            ["d1", "0", "101.0", "0", "0", "0", "0", "0", "1"],
+            ["d2", "0", "102.0", "0", "0", "0", "0", "0", "1"],
+        ],
+    }
+
+    client._get_json = lambda path, params: payload  # type: ignore[method-assign]
+
+    highs = client.get_daily_highs("BTC-USDT-SWAP", limit=2)
+
+    assert highs == [101.0, 102.0]
+
+
+def test_okx_get_current_prices_uses_bulk_ticker_endpoint_and_filters_symbols() -> None:
+    client = OkxClient()
+    captured: dict[str, dict[str, str]] = {}
+
+    def fake_get_json(path, params):
+        captured["call"] = {"path": path, **params}
+        return {
+            "code": "0",
+            "data": [
+                {"instId": "BTC-USDT-SWAP", "last": "100000.0"},
+                {"instId": "ETH-USDT-SWAP", "last": "2000.0"},
+            ],
+        }
+
+    client._get_json = fake_get_json  # type: ignore[method-assign]
+
+    prices = client.get_current_prices(["BTC-USDT-SWAP"])
+
+    assert captured["call"]["path"] == "/api/v5/market/tickers"
+    assert prices == {"BTC-USDT-SWAP": 100000.0}
