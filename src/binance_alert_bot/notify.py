@@ -16,6 +16,7 @@ LOGGER = logging.getLogger(__name__)
 class TelegramNotifier:
     """负责把突破提醒和链上转账发送到 Telegram。"""
 
+    BREAKOUT_SUMMARY_MAX_CHARS = 3500
     TRANSFER_SUMMARY_MAX_CHARS = 3500
     TRANSFER_SUMMARY_MAX_MATCHES = 50
 
@@ -30,23 +31,15 @@ class TelegramNotifier:
 
         new_breakouts = [item for item in breakouts if item.get("status") == "新突破"]
         existing_breakouts = [item for item in breakouts if item.get("status") != "新突破"]
-
-        lines = [f"[突破名单] {len(breakouts)}个", ""]
-
-        if new_breakouts:
-            lines.append("新突破")
-            for item in new_breakouts:
-                lines.append(self._format_breakout_line(item))
-            lines.append("")
-
-        if existing_breakouts:
-            lines.append("今日已突破")
-            for item in existing_breakouts:
-                lines.append(self._format_breakout_line(item))
-            lines.append("")
-
-        text = "\n".join(lines).strip()
-        return self._send_text(text, f"{len(breakouts)} breakout symbols")
+        chunks = self._chunk_breakout_sections(
+            total_breakouts=len(breakouts),
+            sections=[("新突破", new_breakouts), ("今日已突破", existing_breakouts)],
+        )
+        ok = True
+        for index, chunk in enumerate(chunks, start=1):
+            context = f"{len(breakouts)} breakout symbols chunk {index}/{len(chunks)}"
+            ok = self._send_text(chunk, context) and ok
+        return ok
 
     def _format_breakout_line(self, item: dict) -> str:
         _, percent = breakout_delta(item["current_price"], item["threshold"])
@@ -112,6 +105,43 @@ class TelegramNotifier:
                 current_lines = candidate_lines
 
         final_text = "\n".join(current_lines + suffix).strip()
+        if not chunks:
+            return [final_text]
+
+        chunks.append(final_text)
+        total_chunks = len(chunks)
+        return [f"[{index}/{total_chunks}]\n{chunk}" for index, chunk in enumerate(chunks, start=1)]
+
+    def _chunk_breakout_sections(
+        self,
+        total_breakouts: int,
+        sections: list[tuple[str, list[dict]]],
+    ) -> list[str]:
+        """按 Telegram 长度限制拆分突破名单，必要时重复分块标题。"""
+        header = [f"[突破名单] {total_breakouts}个"]
+        chunks: list[str] = []
+        current_lines = header[:]
+        current_section: str | None = None
+
+        for heading, items in sections:
+            if not items:
+                continue
+            for item in items:
+                addition: list[str] = []
+                if current_section != heading:
+                    if len(current_lines) > len(header):
+                        addition.append("")
+                    addition.append(heading)
+                addition.append(self._format_breakout_line(item))
+                candidate = "\n".join(current_lines + addition).strip()
+                if len(candidate) > self.BREAKOUT_SUMMARY_MAX_CHARS and len(current_lines) > len(header):
+                    chunks.append("\n".join(current_lines).strip())
+                    current_lines = header + ["", heading, self._format_breakout_line(item)]
+                else:
+                    current_lines.extend(addition)
+                current_section = heading
+
+        final_text = "\n".join(current_lines).strip()
         if not chunks:
             return [final_text]
 

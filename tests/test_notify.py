@@ -240,3 +240,33 @@ def test_telegram_notifier_keeps_display_order_but_uses_first_breakout_ordinal(m
     assert calls[0].index("B-USDT-SWAP") < calls[0].index("A-USDT-SWAP")
     assert "[第1个突破] A-USDT-SWAP" in calls[0]
     assert "[第2个突破] B-USDT-SWAP" in calls[0]
+
+
+def test_telegram_notifier_splits_large_breakout_summary(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def fake_post(*args, **kwargs):
+        calls.append(kwargs["json"]["text"])
+        return make_response(200, json={"ok": True})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    notifier = TelegramNotifier(TelegramConfig(bot_token="token", chat_id="chat"))
+    notifier.BREAKOUT_SUMMARY_MAX_CHARS = 120
+
+    breakouts = [
+        {
+            "symbol": f"LONG-SYMBOL-{index:02d}-USDT-SWAP",
+            "current_price": 100.0 + index,
+            "threshold": 90.0,
+            "status": "今日已突破",
+            "breakout_ordinal": index + 1,
+        }
+        for index in range(4)
+    ]
+
+    assert notifier.send_breakout_summary(breakouts, datetime(2026, 4, 11, 8, 30)) is True
+
+    assert len(calls) > 1
+    assert calls[0].startswith("[1/")
+    assert all("[突破名单] 4个" in call for call in calls)
+    assert all("今日已突破" in call for call in calls)

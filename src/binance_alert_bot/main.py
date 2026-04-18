@@ -8,7 +8,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from .config import load_config
-from .exchange import OkxClient
+from .exchange import BinanceFuturesClient
 from .notify import TelegramNotifier
 from .scheduler import BreakoutMonitor
 from .state import StateStore
@@ -35,7 +35,7 @@ def setup_logging(log_file: Path, log_level: str) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     """定义启动程序时使用的命令行参数。"""
-    parser = argparse.ArgumentParser(description="Monitor OKX USDT perpetual swap breakouts.")
+    parser = argparse.ArgumentParser(description="Monitor Binance USDT perpetual futures breakouts.")
     parser.add_argument("--config", required=True, help="Path to config.toml")
     return parser
 
@@ -52,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     setup_logging(config.log_file, config.log_level)
-    logging.getLogger(__name__).info("Starting alert bot with OKX market data")
+    logging.getLogger(__name__).info("Starting alert bot with Binance futures market data")
     logging.getLogger(__name__).info(
         "Config loaded: monitor_all=%s symbols=%s timezone=%s state_path=%s",
         config.monitor_all,
@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
 
     monitor = BreakoutMonitor(
         config=config,
-        exchange=OkxClient(),
+        exchange=BinanceFuturesClient(),
         notifier=TelegramNotifier(config.telegram),
         state_store=StateStore(config.state_path),
     )

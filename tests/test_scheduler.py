@@ -1,8 +1,10 @@
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from binance_alert_bot.config import AppConfig, TelegramConfig
 from binance_alert_bot.scheduler import BreakoutMonitor
-from binance_alert_bot.state import StateStore
+from binance_alert_bot.state import MonitorState, StateStore, SymbolState
 
 
 class FakeExchange:
@@ -28,6 +30,14 @@ class FakeExchange:
         if symbol == self.failing_price_symbol:
             raise RuntimeError("price failed")
         return self.prices[symbol]
+
+    def get_current_prices(self, symbols) -> dict[str, float]:
+        prices: dict[str, float] = {}
+        for symbol in symbols:
+            if symbol == self.failing_price_symbol:
+                continue
+            prices[symbol] = self.prices[symbol]
+        return prices
 
 
 class FakeNotifier:
@@ -310,3 +320,31 @@ def test_refresh_thresholds_reapplies_ignored_symbols_in_monitor_all_mode(tmp_pa
     monitor.initialize()
 
     assert "INTC-USDT-SWAP" not in monitor.symbols
+
+
+def test_breakout_cycle_date_tracks_utc_day_for_1dutc_strategy() -> None:
+    local_now = datetime(2026, 4, 18, 7, 59, tzinfo=ZoneInfo("Asia/Hong_Kong"))
+    next_local_now = datetime(2026, 4, 18, 8, 0, tzinfo=ZoneInfo("Asia/Hong_Kong"))
+
+    assert BreakoutMonitor._breakout_cycle_date(local_now) == "2026-04-17"
+    assert BreakoutMonitor._breakout_cycle_date(next_local_now) == "2026-04-18"
+
+
+def test_check_prices_refreshes_when_last_threshold_refresh_is_previous_utc_day(tmp_path) -> None:
+    config = make_config(tmp_path)
+    notifier = FakeNotifier(success=True)
+    exchange = FakeExchange(prices={"BTC-USDT-SWAP": 9.0})
+    monitor = BreakoutMonitor(config, exchange, notifier, StateStore(config.state_path))
+    monitor.symbols = ["BTC-USDT-SWAP"]
+    monitor.state = MonitorState(
+        date="2026-04-18",
+        last_threshold_refresh_time="2026-04-17T23:59:00+00:00",
+        symbols={"BTC-USDT-SWAP": SymbolState(threshold=999.0, notified=False)},
+    )
+    monitor._now = lambda: datetime(2026, 4, 18, 0, 0, tzinfo=ZoneInfo("UTC"))  # type: ignore[method-assign]
+
+    monitor.check_prices()
+
+    assert monitor.state is not None
+    assert monitor.state.symbols["BTC-USDT-SWAP"].threshold == 10.0
+    assert notifier.sent == []

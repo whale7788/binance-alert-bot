@@ -3,19 +3,21 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from .config import AppConfig
-from .exchange import OkxClient
+from .exchange import BinanceFuturesClient
 from .notify import TelegramNotifier
 from .state import MonitorState, StateStore
 from .strategy import breakout_delta, calculate_threshold, is_breakout
 
 
 LOGGER = logging.getLogger(__name__)
+UTC = ZoneInfo("UTC")
 
 
 class BreakoutMonitor:
@@ -24,7 +26,7 @@ class BreakoutMonitor:
     def __init__(
         self,
         config: AppConfig,
-        exchange: OkxClient,
+        exchange: BinanceFuturesClient,
         notifier: TelegramNotifier,
         state_store: StateStore,
     ) -> None:
@@ -43,13 +45,9 @@ class BreakoutMonitor:
         if not self.symbols:
             raise RuntimeError("No valid symbols to monitor")
 
-        self.state = self.state_store.load(today=now.date().isoformat())
+        self.state = self.state_store.load(today=self._breakout_cycle_date(now))
         LOGGER.info("Loaded state for date=%s with %d symbols", self.state.date, len(self.state.symbols))
-        if self.state.needs_refresh(today=now.date().isoformat(), symbols=self.symbols):
-            LOGGER.info("Threshold state is missing or stale; refreshing immediately")
-            self.refresh_thresholds()
-        else:
-            LOGGER.info("Today's thresholds already exist; skipping startup refresh")
+        self._ensure_current_thresholds(now, context="startup")
 
     def start(self) -> None:
         """注册定时任务并启动调度器。"""
@@ -108,7 +106,7 @@ class BreakoutMonitor:
     def refresh_thresholds(self) -> None:
         """刷新当天的突破阈值。"""
         now = self._now()
-        today = now.date().isoformat()
+        today = self._breakout_cycle_date(now)
         LOGGER.info("Refreshing thresholds for %d symbols", len(self.symbols))
 
         if self.config.monitor_all:
@@ -136,20 +134,17 @@ class BreakoutMonitor:
     def check_prices(self) -> None:
         """检查是否有新的突破，并在有新突破时推送完整名单。"""
         now = self._now()
-        today = now.date().isoformat()
+        self._ensure_current_thresholds(now, context="price check")
         state = self._state()
-        if state.needs_refresh(today=today, symbols=self.symbols):
-            LOGGER.info("State is stale before price check; refreshing thresholds")
-            self.refresh_thresholds()
-            state = self._state()
 
         LOGGER.info("Checking prices for %d symbols", len(state.symbols))
+        current_prices = self.exchange.get_current_prices(state.symbols.keys())
         new_breakouts: list[dict[str, float | str | int]] = []
         for symbol, symbol_state in list(state.symbols.items()):
             try:
                 if symbol_state.notified:
                     continue
-                current_price = self.exchange.get_current_price(symbol)
+                current_price = current_prices[symbol]
                 if not is_breakout(current_price, symbol_state.threshold):
                     LOGGER.debug(
                         "No breakout: symbol=%s current_price=%s threshold=%s",
@@ -197,12 +192,8 @@ class BreakoutMonitor:
     def send_periodic_summary(self) -> None:
         """定时推送今日已突破币种的最新涨幅概览。"""
         now = self._now()
-        today = now.date().isoformat()
+        self._ensure_current_thresholds(now, context="periodic summary")
         state = self._state()
-        if state.needs_refresh(today=today, symbols=self.symbols):
-            LOGGER.info("State is stale before periodic summary; refreshing thresholds")
-            self.refresh_thresholds()
-            state = self._state()
 
         summary_breakouts = self._sort_breakouts_by_percent(self._collect_notified_breakouts(state))
         if not summary_breakouts:
@@ -253,15 +244,17 @@ class BreakoutMonitor:
     def _collect_notified_breakouts(self, state: MonitorState) -> list[dict[str, float | str]]:
         """收集今天已突破币种的最新价格。"""
         todays_breakouts: list[dict[str, float | str]] = []
+        current_prices = self.exchange.get_current_prices(state.symbols.keys())
         for symbol, symbol_state in list(state.symbols.items()):
             if not symbol_state.notified:
                 continue
             try:
+                current_price = current_prices[symbol]
                 todays_breakouts.append(
                     {
                         "status": "今日已突破",
                         "symbol": symbol,
-                        "current_price": self.exchange.get_current_price(symbol),
+                        "current_price": current_price,
                         "threshold": symbol_state.threshold,
                         "breakout_time": symbol_state.first_breakout_time or symbol_state.last_notify_time or "",
                     }
@@ -269,6 +262,26 @@ class BreakoutMonitor:
             except Exception:
                 LOGGER.exception("Failed to refresh current price for already-broken symbol %s", symbol)
         return todays_breakouts
+
+    def _ensure_current_thresholds(self, now: datetime, context: str) -> None:
+        """在进入核心流程前，确保当前 UTC 交易日的阈值已经刷新。"""
+        state = self._state()
+        today = self._breakout_cycle_date(now)
+        last_refreshed = state.last_threshold_refresh_time
+        last_refresh_cycle = (
+            self._breakout_cycle_date(datetime.fromisoformat(last_refreshed)) if last_refreshed else None
+        )
+        if state.needs_refresh(today=today, symbols=self.symbols) or last_refresh_cycle != today:
+            LOGGER.info(
+                "Thresholds are stale before %s; refreshing thresholds (state_date=%s, last_refresh_cycle=%s, today=%s)",
+                context,
+                state.date,
+                last_refresh_cycle,
+                today,
+            )
+            self.refresh_thresholds()
+        else:
+            LOGGER.info("Thresholds already current for %s on UTC day %s", context, today)
 
     def _state(self) -> MonitorState:
         """按需创建内存中的空状态。"""
@@ -279,6 +292,11 @@ class BreakoutMonitor:
     def _now(self) -> datetime:
         """返回配置时区下的当前时间。"""
         return datetime.now(self.config.zoneinfo)
+
+    @staticmethod
+    def _breakout_cycle_date(now: datetime) -> str:
+        """把状态切换边界对齐到 1Dutc 的 UTC 交易日。"""
+        return now.astimezone(UTC).date().isoformat()
 
     @staticmethod
     def _sort_breakouts(breakouts: list[dict[str, float | str]]) -> list[dict[str, float | str]]:
