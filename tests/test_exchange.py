@@ -3,13 +3,36 @@ import httpx
 from binance_alert_bot.exchange import BinanceFuturesClient, OkxClient
 
 
-def test_get_daily_highs_skips_today_unfinished_candle() -> None:
-    """Binance klines 最后一根日 K 视为今天，计算阈值时应跳过它。"""
+class _FakeDateTime:
+    @staticmethod
+    def now(tz=None):
+        return __import__("datetime").datetime(2024, 4, 30, 0, 4, tzinfo=tz)
+
+
+def test_get_daily_highs_skips_today_unfinished_candle(monkeypatch) -> None:
+    """Binance 只在最后一根日 K 仍未收线时跳过它。"""
     client = BinanceFuturesClient()
+    monkeypatch.setattr("binance_alert_bot.exchange.datetime", _FakeDateTime)
     payload = [
-        ["d1", "0", "101.0", "0", "0", "0", "0", "0", "0", "0", "0", "0"],
-        ["d2", "0", "102.0", "0", "0", "0", "0", "0", "0", "0", "0", "0"],
-        ["today", "0", "999.0", "0", "0", "0", "0", "0", "0", "0", "0", "0"],
+        ["d1", "0", "101.0", "0", "0", "0", "1714348799999", "0", "0", "0", "0", "0"],
+        ["d2", "0", "102.0", "0", "0", "0", "1714435199999", "0", "0", "0", "0", "0"],
+        ["today", "0", "999.0", "0", "0", "0", "1714521599999", "0", "0", "0", "0", "0"],
+    ]
+
+    client._get_json = lambda path, params: payload  # type: ignore[method-assign]
+
+    highs = client.get_daily_highs("BTCUSDT", limit=2)
+
+    assert highs == [101.0, 102.0]
+
+
+def test_get_daily_highs_keeps_latest_completed_candle_when_new_day_kline_not_listed(monkeypatch) -> None:
+    client = BinanceFuturesClient()
+    monkeypatch.setattr("binance_alert_bot.exchange.datetime", _FakeDateTime)
+    payload = [
+        ["d0", "0", "100.0", "0", "0", "0", "1714262399999", "0", "0", "0", "0", "0"],
+        ["d1", "0", "101.0", "0", "0", "0", "1714348799999", "0", "0", "0", "0", "0"],
+        ["d2", "0", "102.0", "0", "0", "0", "1714435199999", "0", "0", "0", "0", "0"],
     ]
 
     client._get_json = lambda path, params: payload  # type: ignore[method-assign]
@@ -108,6 +131,23 @@ def test_okx_get_daily_highs_skips_today_unfinished_candle() -> None:
         "code": "0",
         "data": [
             ["today", "0", "999.0", "0", "0", "0", "0", "0", "0"],
+            ["d1", "0", "101.0", "0", "0", "0", "0", "0", "1"],
+            ["d2", "0", "102.0", "0", "0", "0", "0", "0", "1"],
+        ],
+    }
+
+    client._get_json = lambda path, params: payload  # type: ignore[method-assign]
+
+    highs = client.get_daily_highs("BTC-USDT-SWAP", limit=2)
+
+    assert highs == [101.0, 102.0]
+
+
+def test_okx_get_daily_highs_keeps_latest_completed_candle_when_new_day_not_listed() -> None:
+    client = OkxClient()
+    payload = {
+        "code": "0",
+        "data": [
             ["d1", "0", "101.0", "0", "0", "0", "0", "0", "1"],
             ["d2", "0", "102.0", "0", "0", "0", "0", "0", "1"],
         ],

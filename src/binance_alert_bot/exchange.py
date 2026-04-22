@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Iterable
+from datetime import datetime, timezone
 from typing import Protocol
 
 import httpx
@@ -65,7 +66,7 @@ class OkxClient:
             params={"instId": self._normalize_symbol(symbol), "bar": "1Dutc", "limit": str(limit + 1)},
         )
         candles = payload.get("data", [])
-        completed_candles = candles[1 : limit + 1]
+        completed_candles = [candle for candle in candles if self._is_okx_candle_closed(candle)][:limit]
         return [float(candle[2]) for candle in completed_candles]
 
     def get_current_price(self, symbol: str) -> float:
@@ -139,6 +140,13 @@ class OkxClient:
             return f"{base}-USDT-SWAP"
         return normalized
 
+    @staticmethod
+    def _is_okx_candle_closed(candle: list[str]) -> bool:
+        try:
+            return str(candle[8]) == "1"
+        except (IndexError, TypeError):
+            return False
+
 
 class BinanceFuturesClient:
     """对 Binance U 本位永续合约 HTTP API 的轻量封装。"""
@@ -188,7 +196,9 @@ class BinanceFuturesClient:
             "/fapi/v1/klines",
             params={"symbol": self._normalize_symbol(symbol), "interval": "1d", "limit": str(limit + 1)},
         )
-        completed_candles = payload[:-1]
+        completed_candles = payload
+        if payload and not self._is_binance_kline_closed(payload[-1]):
+            completed_candles = payload[:-1]
         if len(completed_candles) > limit:
             completed_candles = completed_candles[-limit:]
         return [float(candle[2]) for candle in completed_candles]
@@ -258,3 +268,12 @@ class BinanceFuturesClient:
         if normalized.endswith("-SWAP"):
             normalized = normalized[:-5]
         return normalized.replace("-", "")
+
+    @staticmethod
+    def _is_binance_kline_closed(candle: list[str]) -> bool:
+        try:
+            close_time_ms = int(candle[6])
+        except (IndexError, TypeError, ValueError):
+            return False
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        return close_time_ms < now_ms

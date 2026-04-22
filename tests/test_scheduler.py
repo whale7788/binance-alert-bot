@@ -8,9 +8,16 @@ from binance_alert_bot.state import MonitorState, StateStore, SymbolState
 
 
 class FakeExchange:
-    def __init__(self, prices: dict[str, float] | None = None, failing_price_symbol: str | None = None) -> None:
+    def __init__(
+        self,
+        prices: dict[str, float] | None = None,
+        failing_price_symbol: str | None = None,
+        daily_highs: dict[str, list[float]] | None = None,
+    ) -> None:
         self.prices = prices or {}
         self.failing_price_symbol = failing_price_symbol
+        self.daily_highs = daily_highs or {}
+        self.daily_high_calls = 0
         self.closed = False
 
     def close(self) -> None:
@@ -24,6 +31,9 @@ class FakeExchange:
         return [symbol for symbol in requested_symbols if symbol in available]
 
     def get_daily_highs(self, symbol: str, limit: int = 10) -> list[float]:
+        self.daily_high_calls += 1
+        if symbol in self.daily_highs:
+            return self.daily_highs[symbol]
         return [float(value) for value in range(1, limit + 1)]
 
     def get_current_price(self, symbol: str) -> float:
@@ -348,3 +358,20 @@ def test_check_prices_refreshes_when_last_threshold_refresh_is_previous_utc_day(
     assert monitor.state is not None
     assert monitor.state.symbols["BTC-USDT-SWAP"].threshold == 10.0
     assert notifier.sent == []
+
+
+def test_refresh_thresholds_skips_duplicate_refresh_for_current_utc_day(tmp_path) -> None:
+    config = make_config(tmp_path)
+    notifier = FakeNotifier(success=True)
+    exchange = FakeExchange(prices={"BTC-USDT-SWAP": 16.0})
+    monitor = BreakoutMonitor(config, exchange, notifier, StateStore(config.state_path))
+
+    monitor.initialize()
+    monitor.check_prices()
+    calls_after_initialize = exchange.daily_high_calls
+
+    monitor.refresh_thresholds()
+
+    assert exchange.daily_high_calls == calls_after_initialize
+    assert monitor.state is not None
+    assert monitor.state.symbols["BTC-USDT-SWAP"].notified is True

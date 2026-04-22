@@ -107,7 +107,6 @@ class BreakoutMonitor:
         """刷新当天的突破阈值。"""
         now = self._now()
         today = self._breakout_cycle_date(now)
-        LOGGER.info("Refreshing thresholds for %d symbols", len(self.symbols))
 
         if self.config.monitor_all:
             try:
@@ -115,6 +114,16 @@ class BreakoutMonitor:
             except Exception:
                 LOGGER.exception("Failed to refresh symbol list")
 
+        state = self._state()
+        last_refreshed = state.last_threshold_refresh_time
+        last_refresh_cycle = (
+            self._breakout_cycle_date(datetime.fromisoformat(last_refreshed)) if last_refreshed else None
+        )
+        if not state.needs_refresh(today=today, symbols=self.symbols) and last_refresh_cycle == today:
+            LOGGER.info("Skipping threshold refresh because thresholds are already current for UTC day %s", today)
+            return
+
+        LOGGER.info("Refreshing thresholds for %d symbols", len(self.symbols))
         thresholds: dict[str, float] = {}
         for symbol in self.symbols:
             try:
