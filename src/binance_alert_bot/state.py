@@ -71,20 +71,28 @@ class MonitorState:
             "symbols": {symbol: state.to_dict() for symbol, state in sorted(self.symbols.items())},
         }
 
-    def needs_refresh(self, today: str, symbols: list[str]) -> bool:
+    def needs_refresh(self, today: str, symbols: list[str], ignore_missing_symbols: bool = False) -> bool:
         """日期变化、缺少 symbol，或残留旧 symbol 时都需要刷新。"""
         if self.date != today:
             return True
         expected = {symbol.upper() for symbol in symbols}
         current = set(self.symbols.keys())
+        if ignore_missing_symbols:
+            return not current or not current.issubset(expected)
         return current != expected
 
     def replace_thresholds(self, today: str, refreshed_at: datetime, thresholds: dict[str, float]) -> None:
-        """替换当天全部阈值，并重置通知标记。"""
+        """替换当天全部阈值；同日刷新时保留已有币种的通知状态。"""
+        preserve_existing = self.date == today
+        previous_symbols = self.symbols
         self.date = today
         self.last_threshold_refresh_time = refreshed_at.isoformat()
         self.symbols = {
-            symbol: SymbolState(threshold=threshold, notified=False, last_notify_time=None, first_breakout_time=None)
+            symbol: self._build_symbol_state(
+                symbol=symbol,
+                threshold=threshold,
+                previous=previous_symbols.get(symbol) if preserve_existing else None,
+            )
             for symbol, threshold in sorted(thresholds.items())
         }
 
@@ -94,6 +102,17 @@ class MonitorState:
         if self.symbols[symbol].first_breakout_time is None:
             self.symbols[symbol].first_breakout_time = notified_at.isoformat()
         self.symbols[symbol].last_notify_time = notified_at.isoformat()
+
+    @staticmethod
+    def _build_symbol_state(symbol: str, threshold: float, previous: SymbolState | None) -> SymbolState:
+        if previous is None:
+            return SymbolState(threshold=threshold, notified=False, last_notify_time=None, first_breakout_time=None)
+        return SymbolState(
+            threshold=threshold,
+            notified=previous.notified,
+            last_notify_time=previous.last_notify_time,
+            first_breakout_time=previous.first_breakout_time,
+        )
 
 
 class StateStore:

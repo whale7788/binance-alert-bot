@@ -375,3 +375,22 @@ def test_refresh_thresholds_skips_duplicate_refresh_for_current_utc_day(tmp_path
     assert exchange.daily_high_calls == calls_after_initialize
     assert monitor.state is not None
     assert monitor.state.symbols["BTC-USDT-SWAP"].notified is True
+
+
+def test_check_prices_does_not_refresh_midday_only_for_new_symbol_listings(tmp_path) -> None:
+    config = make_config(tmp_path, symbols=["BTC-USDT-SWAP"])
+    notifier = FakeNotifier(success=True)
+    exchange = FakeExchange(prices={"BTC-USDT-SWAP": 16.0, "ETH-USDT-SWAP": 17.0})
+    monitor = BreakoutMonitor(config, exchange, notifier, StateStore(config.state_path))
+    monitor.symbols = ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]
+    monitor.state = MonitorState(
+        date="2026-04-18",
+        last_threshold_refresh_time="2026-04-18T00:05:00+00:00",
+        symbols={"BTC-USDT-SWAP": SymbolState(threshold=10.0, notified=True, last_notify_time="2026-04-18T00:10:00+00:00", first_breakout_time="2026-04-18T00:10:00+00:00")},
+    )
+    monitor._now = lambda: datetime(2026, 4, 18, 12, 0, tzinfo=ZoneInfo("UTC"))  # type: ignore[method-assign]
+
+    monitor.check_prices()
+
+    assert exchange.daily_high_calls == 0
+    assert notifier.sent == []

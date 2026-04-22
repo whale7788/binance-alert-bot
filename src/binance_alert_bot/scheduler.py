@@ -119,7 +119,7 @@ class BreakoutMonitor:
         last_refresh_cycle = (
             self._breakout_cycle_date(datetime.fromisoformat(last_refreshed)) if last_refreshed else None
         )
-        if not state.needs_refresh(today=today, symbols=self.symbols) and last_refresh_cycle == today:
+        if not state.needs_refresh(today=today, symbols=self.symbols, ignore_missing_symbols=True) and last_refresh_cycle == today:
             LOGGER.info("Skipping threshold refresh because thresholds are already current for UTC day %s", today)
             return
 
@@ -335,7 +335,7 @@ class BreakoutMonitor:
         last_refresh_cycle = (
             self._breakout_cycle_date(datetime.fromisoformat(last_refreshed)) if last_refreshed else None
         )
-        if state.needs_refresh(today=today, symbols=self.symbols) or last_refresh_cycle != today:
+        if state.needs_refresh(today=today, symbols=self.symbols, ignore_missing_symbols=True) or last_refresh_cycle != today:
             LOGGER.info(
                 "Thresholds are stale before %s; refreshing thresholds (state_date=%s, last_refresh_cycle=%s, today=%s)",
                 context,
