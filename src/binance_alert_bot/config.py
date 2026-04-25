@@ -64,7 +64,7 @@ class AppConfig(BaseModel):
     symbols: list[str] = Field(default_factory=list)
     ignored_symbols: list[str] = Field(default_factory=list)
     check_interval_minutes: int = Field(default=30, ge=1)
-    breakout_summary_interval_hours: int = Field(default=0, ge=0, le=24)
+    breakout_summary_interval_hours: float = Field(default=0, ge=0, le=24)
     threshold_days: int = Field(default=10, ge=1)
     threshold_refresh_time: time
     timezone: str = "UTC"
@@ -131,6 +131,11 @@ class AppConfig(BaseModel):
     def zoneinfo(self) -> ZoneInfo:
         """返回解析后的时区对象。"""
         return ZoneInfo(self.timezone)
+
+    @property
+    def breakout_summary_interval_minutes(self) -> float:
+        """返回今日已突破概览的分钟间隔。"""
+        return self.breakout_summary_interval_hours * 60
 
 
 def load_config(path: str | Path) -> AppConfig:

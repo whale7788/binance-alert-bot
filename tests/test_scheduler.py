@@ -2,6 +2,8 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from apscheduler.triggers.interval import IntervalTrigger
+
 from binance_alert_bot.config import AppConfig, TelegramConfig
 from binance_alert_bot.scheduler import BreakoutMonitor
 from binance_alert_bot.state import MonitorState, StateStore, SymbolState
@@ -254,6 +256,27 @@ def test_periodic_summary_sends_todays_breakouts_without_new_breakouts(tmp_path)
         [("BTC-USDT-SWAP", "新突破")],
         [("BTC-USDT-SWAP", "今日已突破")],
     ]
+
+
+def test_start_schedules_half_hour_periodic_summary(tmp_path) -> None:
+    config = make_config(tmp_path).model_copy(update={"breakout_summary_interval_hours": 0.5})
+    monitor = BreakoutMonitor(
+        config,
+        FakeExchange(prices={"BTC-USDT-SWAP": 9.0}),
+        FakeNotifier(success=True),
+        StateStore(config.state_path),
+    )
+    monitor.initialize()
+
+    monitor.start()
+
+    try:
+        job = monitor.scheduler.get_job("breakout-summary")
+        assert job is not None
+        assert isinstance(job.trigger, IntervalTrigger)
+        assert job.trigger.interval.total_seconds() == 30 * 60
+    finally:
+        monitor.shutdown()
 
 
 def test_periodic_summary_sort_uses_percent_desc() -> None:

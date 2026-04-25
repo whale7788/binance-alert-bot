@@ -62,6 +62,36 @@ existing_breakout_chat_id = ""
     assert config.telegram.existing_breakout_chat_id == "existing-chat"
 
 
+def test_breakout_summary_interval_accepts_half_hour(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+monitor_all = false
+symbols = ["BTC-USDT-SWAP"]
+check_interval_minutes = 15
+breakout_summary_interval_hours = 0.5
+threshold_days = 10
+threshold_refresh_time = "00:05"
+timezone = "UTC"
+state_path = "data/state.json"
+log_file = "logs/monitor.log"
+log_level = "INFO"
+
+[telegram]
+bot_token = ""
+chat_id = ""
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.breakout_summary_interval_hours == 0.5
+    assert config.breakout_summary_interval_minutes == 30
+
+
 def test_missing_telegram_config_reports_clear_error(monkeypatch, tmp_path) -> None:
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)

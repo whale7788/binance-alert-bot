@@ -68,9 +68,8 @@ class BreakoutMonitor:
         if self.config.breakout_summary_interval_hours > 0:
             self.scheduler.add_job(
                 self.send_periodic_summary,
-                CronTrigger(
-                    hour=f"*/{self.config.breakout_summary_interval_hours}",
-                    minute=0,
+                IntervalTrigger(
+                    minutes=self.config.breakout_summary_interval_minutes,
                     timezone=self.config.zoneinfo,
                 ),
                 id="breakout-summary",
@@ -78,7 +77,7 @@ class BreakoutMonitor:
             )
         self.scheduler.start()
         LOGGER.info(
-            "Scheduler started: refresh_time=%s, check_interval_minutes=%d, breakout_summary_interval_hours=%d",
+            "Scheduler started: refresh_time=%s, check_interval_minutes=%d, breakout_summary_interval_hours=%g",
             refresh_time.strftime("%H:%M"),
             self.config.check_interval_minutes,
             self.config.breakout_summary_interval_hours,

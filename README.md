@@ -39,6 +39,8 @@ threshold_refresh_time = "00:05"
 timezone = "UTC"
 ```
 
+`breakout_summary_interval_hours` 支持小数，例如 `0.5` 表示每半小时推送一次“今日已突破”概览。
+
 Telegram 配置推荐放到环境变量：
 
 ```powershell
