@@ -21,7 +21,6 @@ dev = [
 
 [project.scripts]
 binance-alert-bot = "binance_alert_bot.main:main"
-binance-transfer-bot = "binance_alert_bot.transfers_runner:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

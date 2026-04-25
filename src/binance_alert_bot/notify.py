@@ -7,18 +7,15 @@ import httpx
 
 from .config import TelegramConfig
 from .strategy import breakout_delta
-from .transfers.service import MatchedTransfer
 
 
 LOGGER = logging.getLogger(__name__)
 
 
 class TelegramNotifier:
-    """负责把突破提醒和链上转账发送到 Telegram。"""
+    """负责把突破提醒发送到 Telegram。"""
 
     BREAKOUT_SUMMARY_MAX_CHARS = 3500
-    TRANSFER_SUMMARY_MAX_CHARS = 3500
-    TRANSFER_SUMMARY_MAX_MATCHES = 50
 
     def __init__(self, config: TelegramConfig, timeout: float = 20.0) -> None:
         self.config = config
@@ -31,14 +28,29 @@ class TelegramNotifier:
 
         new_breakouts = [item for item in breakouts if item.get("status") == "新突破"]
         existing_breakouts = [item for item in breakouts if item.get("status") != "新突破"]
-        chunks = self._chunk_breakout_sections(
-            total_breakouts=len(breakouts),
-            sections=[("新突破", new_breakouts), ("今日已突破", existing_breakouts)],
-        )
+        destinations: list[tuple[str, list[tuple[str, list[dict]]]]] = []
+        for heading, items in [("新突破", new_breakouts), ("今日已突破", existing_breakouts)]:
+            if not items:
+                continue
+            chat_id = self.config.chat_id_for_breakout_status(heading)
+            for destination_chat_id, sections in destinations:
+                if destination_chat_id == chat_id:
+                    sections.append((heading, items))
+                    break
+            else:
+                destinations.append((chat_id, [(heading, items)]))
+
         ok = True
-        for index, chunk in enumerate(chunks, start=1):
-            context = f"{len(breakouts)} breakout symbols chunk {index}/{len(chunks)}"
-            ok = self._send_text(chunk, context) and ok
+        for chat_id, sections in destinations:
+            total_breakouts = sum(len(items) for _, items in sections)
+            chunks = self._chunk_breakout_sections(
+                total_breakouts=total_breakouts,
+                sections=sections,
+            )
+            headings = "+".join(heading for heading, _ in sections)
+            for index, chunk in enumerate(chunks, start=1):
+                context = f"{headings} {total_breakouts} breakout symbols chunk {index}/{len(chunks)}"
+                ok = self._send_text(chunk, context, chat_id=chat_id) and ok
         return ok
 
     def _format_breakout_line(self, item: dict) -> str:
@@ -46,71 +58,6 @@ class TelegramNotifier:
         ordinal = item.get("breakout_ordinal")
         prefix = "" if ordinal is None else f"[第{int(ordinal)}个突破] "
         return f"{prefix}{item['symbol']}  {item['current_price']:g} > {item['threshold']:g}  ({percent:+.2f}%)"
-
-    def send_transfer_summary(self, matches: list[MatchedTransfer], observed_at: datetime) -> bool:
-        """发送链上大额转账汇总。"""
-        if not matches:
-            return True
-
-        limited_matches = matches[: self.TRANSFER_SUMMARY_MAX_MATCHES]
-        omitted_count = len(matches) - len(limited_matches)
-        sections = [self._format_transfer_section(match) for match in limited_matches]
-        chunks = self._chunk_transfer_sections(
-            sections=sections,
-            total_matches=len(matches),
-            observed_at=observed_at,
-            omitted_count=omitted_count,
-        )
-        ok = True
-        for index, chunk in enumerate(chunks, start=1):
-            context = f"{len(matches)} transfer matches chunk {index}/{len(chunks)}"
-            ok = self._send_text(chunk, context) and ok
-        return ok
-
-    def _format_transfer_section(self, match: MatchedTransfer) -> str:
-        """格式化单条转账记录。"""
-        event = match.event
-        amount_text = f"{event.amount:g} {event.asset}"
-        usd_text = "" if event.usd_value is None else f" (${event.usd_value:,.0f})"
-        from_text = event.from_label or event.from_address
-        to_text = event.to_label or event.to_address
-        return "\n".join(
-            [
-                f"{event.chain} | {amount_text}{usd_text}",
-                f"{from_text} -> {to_text}",
-                f"tx: {event.tx_hash}",
-            ]
-        )
-
-    def _chunk_transfer_sections(
-        self,
-        sections: list[str],
-        total_matches: int,
-        observed_at: datetime,
-        omitted_count: int,
-    ) -> list[str]:
-        """按 Telegram 长度限制拆分转账消息。"""
-        header = [f"[链上大额转账] {total_matches}笔", f"时间: {observed_at.strftime('%Y-%m-%d %H:%M:%S %Z')}"]
-        suffix = [] if omitted_count <= 0 else ["", f"其余 {omitted_count} 笔已省略"]
-        chunks: list[str] = []
-        current_lines = header[:]
-
-        for section in sections:
-            candidate_lines = current_lines + ["", section]
-            candidate_text = "\n".join(candidate_lines + suffix).strip()
-            if len(candidate_text) > self.TRANSFER_SUMMARY_MAX_CHARS and len(current_lines) > len(header):
-                chunks.append("\n".join(current_lines).strip())
-                current_lines = header + ["", section]
-            else:
-                current_lines = candidate_lines
-
-        final_text = "\n".join(current_lines + suffix).strip()
-        if not chunks:
-            return [final_text]
-
-        chunks.append(final_text)
-        total_chunks = len(chunks)
-        return [f"[{index}/{total_chunks}]\n{chunk}" for index, chunk in enumerate(chunks, start=1)]
 
     def _chunk_breakout_sections(
         self,
@@ -149,13 +96,17 @@ class TelegramNotifier:
         total_chunks = len(chunks)
         return [f"[{index}/{total_chunks}]\n{chunk}" for index, chunk in enumerate(chunks, start=1)]
 
-    def _send_text(self, text: str, context: str) -> bool:
+    def _send_text(self, text: str, context: str, chat_id: str) -> bool:
         """发送一条 Telegram 文本消息。"""
+        if not chat_id:
+            LOGGER.error("Telegram chat_id is missing for %s", context)
+            return False
+
         url = f"https://api.telegram.org/bot{self.config.bot_token}/sendMessage"
         try:
             response = httpx.post(
                 url,
-                json={"chat_id": self.config.chat_id, "text": text},
+                json={"chat_id": chat_id, "text": text},
                 timeout=self.timeout,
             )
             response.raise_for_status()

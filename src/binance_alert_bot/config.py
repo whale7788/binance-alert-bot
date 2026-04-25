@@ -15,12 +15,22 @@ class TelegramConfig(BaseModel):
 
     bot_token: str = ""
     chat_id: str = ""
+    new_breakout_chat_id: str = ""
+    existing_breakout_chat_id: str = ""
 
     @model_validator(mode="after")
     def apply_environment(self) -> "TelegramConfig":
         """允许环境变量覆盖配置文件。"""
         self.bot_token = os.getenv("TELEGRAM_BOT_TOKEN", self.bot_token).strip()
         self.chat_id = os.getenv("TELEGRAM_CHAT_ID", self.chat_id).strip()
+        self.new_breakout_chat_id = os.getenv(
+            "TELEGRAM_NEW_BREAKOUT_CHAT_ID",
+            self.new_breakout_chat_id,
+        ).strip()
+        self.existing_breakout_chat_id = os.getenv(
+            "TELEGRAM_EXISTING_BREAKOUT_CHAT_ID",
+            self.existing_breakout_chat_id,
+        ).strip()
         return self
 
     def require_ready(self) -> None:
@@ -28,109 +38,20 @@ class TelegramConfig(BaseModel):
         missing = []
         if not self.bot_token:
             missing.append("TELEGRAM_BOT_TOKEN or telegram.bot_token")
-        if not self.chat_id:
-            missing.append("TELEGRAM_CHAT_ID or telegram.chat_id")
+        if not self.chat_id and not (self.new_breakout_chat_id and self.existing_breakout_chat_id):
+            missing.append(
+                "TELEGRAM_CHAT_ID or telegram.chat_id, or both "
+                "TELEGRAM_NEW_BREAKOUT_CHAT_ID/telegram.new_breakout_chat_id and "
+                "TELEGRAM_EXISTING_BREAKOUT_CHAT_ID/telegram.existing_breakout_chat_id"
+            )
         if missing:
             raise ValueError("Missing Telegram configuration: " + ", ".join(missing))
 
-
-class ArkhamConfig(BaseModel):
-    """Arkham 数据源配置。"""
-
-    client_key: str = ""
-    api_base: str = "https://api.arkm.com"
-    min_usd_value: float = 0.0
-    limit: int = Field(default=100, ge=1, le=500)
-    flow: str = "all"
-
-    @model_validator(mode="after")
-    def apply_environment(self) -> "ArkhamConfig":
-        """允许环境变量注入 Arkham client key。"""
-        self.client_key = os.getenv("ARKHAM_CLIENT_KEY", self.client_key).strip()
-        return self
-
-
-class TransferRuleConfig(BaseModel):
-    """一条链上大额转账筛选规则。"""
-
-    chain: str | None = None
-    asset: str | None = None
-    min_amount: float | None = Field(default=None, gt=0)
-    min_usd_value: float | None = Field(default=None, gt=0)
-
-    @model_validator(mode="after")
-    def validate_thresholds(self) -> "TransferRuleConfig":
-        """至少需要提供一个阈值。"""
-        if self.min_amount is None and self.min_usd_value is None:
-            raise ValueError("transfer rule requires min_amount or min_usd_value")
-        return self
-
-
-class TransfersConfig(BaseModel):
-    """链上大额转账监控配置。"""
-
-    enabled: bool = False
-    poll_interval_seconds: int = Field(default=60, ge=10)
-    source: str = "arkham"
-    ignored_assets: list[str] = Field(default_factory=list)
-    only_to_exchanges: bool = False
-    exchange_labels: list[str] = Field(
-        default_factory=lambda: [
-            "BINANCE",
-            "OKX",
-            "BYBIT",
-            "COINBASE",
-            "KRAKEN",
-            "KUCOIN",
-            "BITGET",
-            "GATE",
-            "GATE.IO",
-            "HTX",
-            "HUOBI",
-            "BITFINEX",
-            "MEXC",
-            "CRYPTO.COM",
-        ]
-    )
-    auto_blacklist_top_n: int = Field(default=50, ge=0, le=250)
-    auto_blacklist_stablecoin_variants: bool = True
-    auto_blacklist_wrapped_variants: bool = True
-    auto_blacklist_staked_variants: bool = True
-    arkham: ArkhamConfig = Field(default_factory=ArkhamConfig)
-    rules: list[TransferRuleConfig] = Field(default_factory=list)
-
-    @field_validator("ignored_assets", mode="before")
-    @classmethod
-    def normalize_ignored_assets(cls, value: Any) -> list[str]:
-        """把忽略资产列表规范成大写代码。"""
-        if value is None:
-            return []
-        if not isinstance(value, list):
-            raise TypeError("transfers.ignored_assets must be a list")
-        return [str(asset).strip().upper() for asset in value if str(asset).strip()]
-
-    @field_validator("exchange_labels", mode="before")
-    @classmethod
-    def normalize_exchange_labels(cls, value: Any) -> list[str]:
-        """把交易所标签关键词规范成大写列表。"""
-        if value is None:
-            return []
-        if not isinstance(value, list):
-            raise TypeError("transfers.exchange_labels must be a list")
-        return [str(item).strip().upper() for item in value if str(item).strip()]
-
-    @model_validator(mode="after")
-    def validate_enabled_config(self) -> "TransfersConfig":
-        """启用 transfer monitor 时校验必要字段。"""
-        if not self.enabled:
-            return self
-        if self.source != "arkham":
-            raise ValueError("transfers.source currently only supports 'arkham'")
-        if not self.arkham.client_key:
-            raise ValueError("Missing Arkham configuration: ARKHAM_CLIENT_KEY or transfers.arkham.client_key")
-        if not self.rules:
-            raise ValueError("transfers.rules must not be empty when transfers.enabled is true")
-        return self
+    def chat_id_for_breakout_status(self, status: str) -> str:
+        """按突破状态选择发送频道，未单独配置时回落到默认频道。"""
+        if status == "新突破":
+            return self.new_breakout_chat_id or self.chat_id
+        return self.existing_breakout_chat_id or self.chat_id
 
 
 class AppConfig(BaseModel):
@@ -151,7 +72,6 @@ class AppConfig(BaseModel):
     log_file: Path = Path("logs/monitor.log")
     log_level: str = "INFO"
     telegram: TelegramConfig
-    transfers: TransfersConfig = Field(default_factory=TransfersConfig)
 
     @field_validator("symbols", mode="before")
     @classmethod
