@@ -47,7 +47,7 @@ timezone = "UTC"
 
 `breakout_summary_interval_hours` 支持小数，例如 `0.5` 表示每半小时推送一次“今日已突破”概览。
 
-`five_minute_drop_enabled = true` 后，程序会把已突破币种放入急跌监控池；某币最近 `five_minute_drop_watch_days` 天内没有再次突破，就会移出。急跌预警不等收线，按 `five_minute_drop_check_interval_seconds` 秒级轮询当前 5 分钟 K 线，并用 `five_minute_drop_max_workers` 并发行情请求。例如 `five_minute_drop_percent = 5` 表示当前 5m K 线的开盘价到实时价 `<= -5%` 就提醒。同一根 5m K 线只提醒一次。
+`five_minute_drop_enabled = true` 后，程序会把已突破币种放入急跌监控池；如果启动时状态文件里已经有“今日已突破”的币，也会自动补进监控池。某币最近 `five_minute_drop_watch_days` 天内没有再次突破，就会移出。急跌预警不等收线，按 `five_minute_drop_check_interval_seconds` 秒级轮询当前 5 分钟 K 线，并用 `five_minute_drop_max_workers` 并发行情请求。例如 `five_minute_drop_percent = 5` 表示当前 5m K 线的开盘价到实时价 `<= -5%` 就提醒。同一根 5m K 线只提醒一次。
 
 Telegram 配置推荐放到环境变量：
 

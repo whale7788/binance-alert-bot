@@ -338,6 +338,41 @@ def test_start_schedules_five_minute_drop_monitor_when_enabled(tmp_path) -> None
         monitor.shutdown()
 
 
+def test_initialize_backfills_existing_breakouts_into_drop_watchlist(tmp_path) -> None:
+    config = make_config(tmp_path, symbols=["BTC-USDT-SWAP", "ETH-USDT-SWAP"]).model_copy(
+        update={"five_minute_drop_enabled": True}
+    )
+    store = StateStore(config.state_path)
+    store.save(
+        MonitorState(
+            date="2026-04-18",
+            last_threshold_refresh_time="2026-04-18T00:05:00+00:00",
+            symbols={
+                "BTC-USDT-SWAP": SymbolState(
+                    threshold=10.0,
+                    notified=True,
+                    last_notify_time="2026-04-18T00:10:00+00:00",
+                    first_breakout_time="2026-04-18T00:10:00+00:00",
+                ),
+                "ETH-USDT-SWAP": SymbolState(threshold=10.0, notified=False),
+            },
+        )
+    )
+    exchange = FakeExchange()
+    monitor = BreakoutMonitor(config, exchange, FakeNotifier(), store)
+    monitor._now = lambda: datetime(2026, 4, 18, 12, 0, tzinfo=ZoneInfo("UTC"))  # type: ignore[method-assign]
+
+    monitor.initialize()
+
+    assert exchange.daily_high_calls == 0
+    assert monitor.state is not None
+    assert set(monitor.state.breakout_watchlist) == {"BTC-USDT-SWAP"}
+    assert (
+        monitor.state.breakout_watchlist["BTC-USDT-SWAP"].last_breakout_time
+        == "2026-04-18T00:10:00+00:00"
+    )
+
+
 def test_five_minute_drop_alerts_on_current_intrabar_kline(tmp_path) -> None:
     config = make_config(tmp_path).model_copy(update={"five_minute_drop_enabled": True})
     notifier = FakeNotifier(success=True)
@@ -365,6 +400,40 @@ def test_five_minute_drop_alerts_on_current_intrabar_kline(tmp_path) -> None:
         monitor.state.breakout_watchlist["BTC-USDT-SWAP"].last_drop_alert_kline_open_time
         == "2026-04-18T00:00:00+00:00"
     )
+
+
+def test_five_minute_drop_check_backfills_existing_breakouts_before_alerting(tmp_path) -> None:
+    config = make_config(tmp_path).model_copy(update={"five_minute_drop_enabled": True})
+    notifier = FakeNotifier(success=True)
+    exchange = FakeExchange(
+        klines={
+            "BTC-USDT-SWAP": [
+                Kline(
+                    open_time=datetime.fromisoformat("2026-04-18T00:00:00+00:00"),
+                    open_price=100.0,
+                    close_price=94.0,
+                )
+            ]
+        },
+    )
+    monitor = BreakoutMonitor(config, exchange, notifier, StateStore(config.state_path))
+    monitor.state = MonitorState(
+        date="2026-04-18",
+        symbols={
+            "BTC-USDT-SWAP": SymbolState(
+                threshold=10.0,
+                notified=True,
+                last_notify_time="2026-04-18T00:10:00+00:00",
+                first_breakout_time="2026-04-18T00:10:00+00:00",
+            )
+        },
+    )
+    monitor._now = lambda: datetime(2026, 4, 18, 12, 0, tzinfo=ZoneInfo("UTC"))  # type: ignore[method-assign]
+
+    monitor.check_five_minute_drops()
+
+    assert notifier.drop_alerts == [[("BTC-USDT-SWAP", 100.0, 94.0)]]
+    assert monitor.state.breakout_watchlist["BTC-USDT-SWAP"].last_breakout_time == "2026-04-18T00:10:00+00:00"
 
 
 def test_five_minute_drop_does_not_alert_twice_for_same_kline(tmp_path) -> None:

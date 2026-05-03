@@ -49,6 +49,10 @@ class BreakoutMonitor:
         self.state = self.state_store.load(today=self._breakout_cycle_date(now))
         LOGGER.info("Loaded state for date=%s with %d symbols", self.state.date, len(self.state.symbols))
         self._ensure_current_thresholds(now, context="startup")
+        if self.config.five_minute_drop_enabled:
+            added = self._backfill_five_minute_drop_watchlist(now)
+            if added:
+                self._save_state(f"5m drop watchlist backfill for {added} existing breakouts")
 
     def start(self) -> None:
         """注册定时任务并启动调度器。"""
@@ -256,14 +260,15 @@ class BreakoutMonitor:
 
         now = self._now()
         state = self._state()
+        added = self._backfill_five_minute_drop_watchlist(now)
         removed = state.prune_breakout_watchlist(now, self.config.five_minute_drop_watch_days)
         if removed:
             LOGGER.info("Pruned %d symbols from 5m drop watchlist", removed)
 
         if not state.breakout_watchlist:
             LOGGER.info("No symbols in 5m drop watchlist")
-            if removed:
-                self._save_state("5m drop watchlist pruning")
+            if added or removed:
+                self._save_state("5m drop watchlist maintenance")
             return
 
         watch_items = list(state.breakout_watchlist.items())
@@ -298,8 +303,8 @@ class BreakoutMonitor:
             len(alerts),
         )
         if not alerts:
-            if removed:
-                self._save_state("5m drop watchlist pruning")
+            if added or removed:
+                self._save_state("5m drop watchlist maintenance")
             return
 
         if self.notifier.send_five_minute_drop_alerts(alerts, now):
@@ -309,8 +314,25 @@ class BreakoutMonitor:
             LOGGER.info("5m drop alerts sent and state updated for %d symbols", len(alerts))
         else:
             LOGGER.error("5m drop alert notification failed; alert state not updated")
-            if removed:
-                self._save_state("5m drop watchlist pruning")
+            if added or removed:
+                self._save_state("5m drop watchlist maintenance")
+
+    def _backfill_five_minute_drop_watchlist(self, now: datetime) -> int:
+        """把今天已经突破但尚未入池的币种补进 5m 急跌观察池。"""
+        state = self._state()
+        added = 0
+        for symbol, symbol_state in state.symbols.items():
+            if not symbol_state.notified or symbol in state.breakout_watchlist:
+                continue
+            breakout_time = self._parse_state_time(
+                symbol_state.first_breakout_time or symbol_state.last_notify_time,
+                fallback=now,
+            )
+            state.record_breakout_watch(symbol, breakout_time)
+            added += 1
+        if added:
+            LOGGER.info("Backfilled %d existing breakout symbols into 5m drop watchlist", added)
+        return added
 
     def _build_five_minute_drop_alert(
         self,
@@ -471,6 +493,19 @@ class BreakoutMonitor:
     def _now(self) -> datetime:
         """返回配置时区下的当前时间。"""
         return datetime.now(self.config.zoneinfo)
+
+    @staticmethod
+    def _parse_state_time(value: str | None, fallback: datetime) -> datetime:
+        """解析状态文件里的时间，缺失或损坏时回退到当前时间。"""
+        if not value:
+            return fallback
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return fallback
+        if parsed.tzinfo is None and fallback.tzinfo is not None:
+            return parsed.replace(tzinfo=fallback.tzinfo)
+        return parsed
 
     @staticmethod
     def _breakout_cycle_date(now: datetime) -> str:
