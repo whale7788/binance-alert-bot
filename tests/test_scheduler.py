@@ -90,6 +90,7 @@ class FakeNotifier:
         self.sent: list[list[tuple[str, str]]] = []
         self.sent_with_ordinals: list[list[tuple[str, str, int | None]]] = []
         self.drop_alerts: list[list[tuple[str, float, float]]] = []
+        self.continuous_alerts: list[list[tuple[str, str]]] = []
 
     def send_breakout_summary(self, breakouts, breakout_time) -> bool:
         self.sent.append([(item["symbol"], item["status"]) for item in breakouts])
@@ -100,6 +101,10 @@ class FakeNotifier:
 
     def send_five_minute_drop_alerts(self, alerts, alert_time) -> bool:
         self.drop_alerts.append([(item["symbol"], item["open_price"], item["close_price"]) for item in alerts])
+        return self.success
+
+    def send_continuous_breakout_alerts(self, alerts, alert_time) -> bool:
+        self.continuous_alerts.append([(item["symbol"], item["previous_breakout_time"]) for item in alerts])
         return self.success
 
 
@@ -240,6 +245,96 @@ def test_new_breakout_ordinals_accumulate_across_notifications(tmp_path) -> None
     assert notifier.sent_with_ordinals[0][0][2] == 1
     assert notifier.sent_with_ordinals[1][0][0] == "ETH-USDT-SWAP"
     assert notifier.sent_with_ordinals[1][0][2] == 2
+
+
+def test_continuous_breakout_alerts_when_symbol_broke_on_previous_day(tmp_path) -> None:
+    config = make_config(tmp_path).model_copy(update={"continuous_breakout_enabled": True})
+    notifier = FakeNotifier(success=True)
+    monitor = BreakoutMonitor(
+        config,
+        FakeExchange(prices={"BTC-USDT-SWAP": 16.0}),
+        notifier,
+        StateStore(config.state_path),
+    )
+    monitor.symbols = ["BTC-USDT-SWAP"]
+    monitor.state = MonitorState(
+        date="2026-04-18",
+        last_threshold_refresh_time="2026-04-18T00:05:00+00:00",
+        symbols={"BTC-USDT-SWAP": SymbolState(threshold=10.0, notified=False)},
+        breakout_watchlist={
+            "BTC-USDT-SWAP": BreakoutWatchState(
+                first_breakout_time="2026-04-17T00:10:00+00:00",
+                last_breakout_time="2026-04-17T00:10:00+00:00",
+            )
+        },
+    )
+    monitor._now = lambda: datetime(2026, 4, 18, 0, 10, tzinfo=ZoneInfo("UTC"))  # type: ignore[method-assign]
+
+    monitor.check_prices()
+
+    assert notifier.sent == [[("BTC-USDT-SWAP", "新突破")]]
+    assert notifier.continuous_alerts == [[("BTC-USDT-SWAP", "2026-04-17T00:10:00+00:00")]]
+    assert monitor.state is not None
+    assert monitor.state.symbols["BTC-USDT-SWAP"].notified is True
+    assert monitor.state.breakout_watchlist["BTC-USDT-SWAP"].last_breakout_time == "2026-04-18T00:10:00+00:00"
+
+
+def test_continuous_breakout_ignores_same_utc_day_previous_breakout(tmp_path) -> None:
+    config = make_config(tmp_path).model_copy(update={"continuous_breakout_enabled": True})
+    notifier = FakeNotifier(success=True)
+    monitor = BreakoutMonitor(
+        config,
+        FakeExchange(prices={"BTC-USDT-SWAP": 16.0}),
+        notifier,
+        StateStore(config.state_path),
+    )
+    monitor.symbols = ["BTC-USDT-SWAP"]
+    monitor.state = MonitorState(
+        date="2026-04-18",
+        last_threshold_refresh_time="2026-04-18T00:05:00+00:00",
+        symbols={"BTC-USDT-SWAP": SymbolState(threshold=10.0, notified=False)},
+        breakout_watchlist={
+            "BTC-USDT-SWAP": BreakoutWatchState(
+                first_breakout_time="2026-04-18T00:01:00+00:00",
+                last_breakout_time="2026-04-18T00:01:00+00:00",
+            )
+        },
+    )
+    monitor._now = lambda: datetime(2026, 4, 18, 0, 10, tzinfo=ZoneInfo("UTC"))  # type: ignore[method-assign]
+
+    monitor.check_prices()
+
+    assert notifier.sent == [[("BTC-USDT-SWAP", "新突破")]]
+    assert notifier.continuous_alerts == []
+
+
+def test_continuous_breakout_ignores_breakouts_outside_watch_window(tmp_path) -> None:
+    config = make_config(tmp_path).model_copy(update={"continuous_breakout_enabled": True})
+    notifier = FakeNotifier(success=True)
+    monitor = BreakoutMonitor(
+        config,
+        FakeExchange(prices={"BTC-USDT-SWAP": 16.0}),
+        notifier,
+        StateStore(config.state_path),
+    )
+    monitor.symbols = ["BTC-USDT-SWAP"]
+    monitor.state = MonitorState(
+        date="2026-04-18",
+        last_threshold_refresh_time="2026-04-18T00:05:00+00:00",
+        symbols={"BTC-USDT-SWAP": SymbolState(threshold=10.0, notified=False)},
+        breakout_watchlist={
+            "BTC-USDT-SWAP": BreakoutWatchState(
+                first_breakout_time="2026-04-01T00:10:00+00:00",
+                last_breakout_time="2026-04-01T00:10:00+00:00",
+            )
+        },
+    )
+    monitor._now = lambda: datetime(2026, 4, 18, 0, 10, tzinfo=ZoneInfo("UTC"))  # type: ignore[method-assign]
+
+    monitor.check_prices()
+
+    assert notifier.sent == [[("BTC-USDT-SWAP", "新突破")]]
+    assert notifier.continuous_alerts == []
 
 
 def test_sort_breakouts_uses_breakout_time_only() -> None:

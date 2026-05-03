@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -49,10 +49,10 @@ class BreakoutMonitor:
         self.state = self.state_store.load(today=self._breakout_cycle_date(now))
         LOGGER.info("Loaded state for date=%s with %d symbols", self.state.date, len(self.state.symbols))
         self._ensure_current_thresholds(now, context="startup")
-        if self.config.five_minute_drop_enabled:
+        if self.config.five_minute_drop_enabled or self.config.continuous_breakout_enabled:
             added = self._backfill_five_minute_drop_watchlist(now)
             if added:
-                self._save_state(f"5m drop watchlist backfill for {added} existing breakouts")
+                self._save_state(f"breakout watchlist backfill for {added} existing breakouts")
 
     def start(self) -> None:
         """注册定时任务并启动调度器。"""
@@ -172,6 +172,9 @@ class BreakoutMonitor:
         now = self._now()
         self._ensure_current_thresholds(now, context="price check")
         state = self._state()
+        removed_from_watchlist = state.prune_breakout_watchlist(now, self._watchlist_days())
+        if removed_from_watchlist:
+            LOGGER.info("Pruned %d symbols from breakout watchlist before price check", removed_from_watchlist)
 
         LOGGER.info("Checking prices for %d symbols", len(state.symbols))
         current_prices = self.exchange.get_current_prices(state.symbols.keys())
@@ -234,8 +237,11 @@ class BreakoutMonitor:
             len(new_breakouts),
         )
         if not new_breakouts:
+            if removed_from_watchlist:
+                self._save_state("breakout watchlist pruning")
             return
 
+        continuous_breakouts = self._collect_continuous_breakouts(new_breakouts, state, now)
         todays_breakout_count = sum(1 for symbol_state in state.symbols.values() if symbol_state.notified)
         notification_breakouts = self._assign_breakout_ordinals(
             self._sort_breakouts(new_breakouts),
@@ -243,6 +249,11 @@ class BreakoutMonitor:
         )
 
         if self.notifier.send_breakout_summary(notification_breakouts, now):
+            if continuous_breakouts:
+                if self.notifier.send_continuous_breakout_alerts(continuous_breakouts, now):
+                    LOGGER.info("Continuous breakout alerts sent for %d symbols", len(continuous_breakouts))
+                else:
+                    LOGGER.error("Continuous breakout alert notification failed")
             for item in new_breakouts:
                 symbol = str(item["symbol"])
                 state.mark_notified(symbol, now)
@@ -261,7 +272,7 @@ class BreakoutMonitor:
         now = self._now()
         state = self._state()
         added = self._backfill_five_minute_drop_watchlist(now)
-        removed = state.prune_breakout_watchlist(now, self.config.five_minute_drop_watch_days)
+        removed = state.prune_breakout_watchlist(now, self._watchlist_days())
         if removed:
             LOGGER.info("Pruned %d symbols from 5m drop watchlist", removed)
 
@@ -318,7 +329,7 @@ class BreakoutMonitor:
                 self._save_state("5m drop watchlist maintenance")
 
     def _backfill_five_minute_drop_watchlist(self, now: datetime) -> int:
-        """把今天已经突破但尚未入池的币种补进 5m 急跌观察池。"""
+        """把今天已经突破但尚未入池的币种补进最近突破观察池。"""
         state = self._state()
         added = 0
         for symbol, symbol_state in state.symbols.items():
@@ -331,8 +342,55 @@ class BreakoutMonitor:
             state.record_breakout_watch(symbol, breakout_time)
             added += 1
         if added:
-            LOGGER.info("Backfilled %d existing breakout symbols into 5m drop watchlist", added)
+            LOGGER.info("Backfilled %d existing breakout symbols into breakout watchlist", added)
         return added
+
+    def _collect_continuous_breakouts(
+        self,
+        new_breakouts: list[dict[str, float | str | int]],
+        state: MonitorState,
+        now: datetime,
+    ) -> list[dict[str, float | str]]:
+        """从本轮新突破里筛出最近一周内再次突破的币种。"""
+        if not self.config.continuous_breakout_enabled:
+            return []
+
+        alerts: list[dict[str, float | str]] = []
+        cutoff = now - self._watchlist_window()
+        today = self._breakout_cycle_date(now)
+        for item in self._sort_breakouts(new_breakouts):
+            symbol = str(item["symbol"])
+            previous = state.breakout_watchlist.get(symbol)
+            if previous is None:
+                continue
+
+            previous_breakout_time = self._parse_state_time(previous.last_breakout_time, fallback=now)
+            if previous_breakout_time < cutoff:
+                continue
+            if self._breakout_cycle_date(previous_breakout_time) == today:
+                continue
+
+            alerts.append(
+                {
+                    "symbol": symbol,
+                    "current_price": float(item["current_price"]),
+                    "threshold": float(item["threshold"]),
+                    "breakout_time": str(item.get("breakout_time", now.isoformat())),
+                    "previous_breakout_time": previous_breakout_time.isoformat(),
+                }
+            )
+        return alerts
+
+    def _watchlist_window(self):
+        """返回最近突破观察池需要保留的最长时间窗口。"""
+        return timedelta(days=self._watchlist_days())
+
+    def _watchlist_days(self) -> int:
+        """返回最近突破观察池需要保留的最长天数。"""
+        return max(
+            self.config.five_minute_drop_watch_days,
+            self.config.continuous_breakout_watch_days,
+        )
 
     def _build_five_minute_drop_alert(
         self,

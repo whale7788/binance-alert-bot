@@ -18,6 +18,7 @@ class TelegramConfig(BaseModel):
     new_breakout_chat_id: str = ""
     existing_breakout_chat_id: str = ""
     five_minute_drop_chat_id: str = ""
+    continuous_breakout_chat_id: str = ""
 
     @model_validator(mode="after")
     def apply_environment(self) -> "TelegramConfig":
@@ -35,6 +36,10 @@ class TelegramConfig(BaseModel):
         self.five_minute_drop_chat_id = os.getenv(
             "TELEGRAM_FIVE_MINUTE_DROP_CHAT_ID",
             os.getenv("TELEGRAM_5M_DROP_CHAT_ID", self.five_minute_drop_chat_id),
+        ).strip()
+        self.continuous_breakout_chat_id = os.getenv(
+            "TELEGRAM_CONTINUOUS_BREAKOUT_CHAT_ID",
+            self.continuous_breakout_chat_id,
         ).strip()
         return self
 
@@ -62,6 +67,10 @@ class TelegramConfig(BaseModel):
         """返回 5 分钟急跌监控频道，未单独配置时回落到默认频道。"""
         return self.five_minute_drop_chat_id or self.chat_id
 
+    def chat_id_for_continuous_breakout(self) -> str:
+        """返回连续突破频道，未单独配置时回落到默认频道。"""
+        return self.continuous_breakout_chat_id or self.chat_id
+
 
 class AppConfig(BaseModel):
     """应用完整配置。"""
@@ -74,6 +83,8 @@ class AppConfig(BaseModel):
     ignored_symbols: list[str] = Field(default_factory=list)
     check_interval_minutes: int = Field(default=30, ge=1)
     breakout_summary_interval_hours: float = Field(default=0, ge=0, le=24)
+    continuous_breakout_enabled: bool = False
+    continuous_breakout_watch_days: int = Field(default=7, ge=1)
     five_minute_drop_enabled: bool = False
     five_minute_drop_percent: float = Field(default=5.0, gt=0, le=100)
     five_minute_drop_watch_days: int = Field(default=7, ge=1)
@@ -144,6 +155,11 @@ class AppConfig(BaseModel):
             raise ValueError(
                 "Missing Telegram configuration: TELEGRAM_FIVE_MINUTE_DROP_CHAT_ID/"
                 "telegram.five_minute_drop_chat_id or TELEGRAM_CHAT_ID/telegram.chat_id"
+            )
+        if self.continuous_breakout_enabled and not self.telegram.chat_id_for_continuous_breakout():
+            raise ValueError(
+                "Missing Telegram configuration: TELEGRAM_CONTINUOUS_BREAKOUT_CHAT_ID/"
+                "telegram.continuous_breakout_chat_id or TELEGRAM_CHAT_ID/telegram.chat_id"
             )
         return self
 

@@ -13,6 +13,7 @@ def test_example_config_loads_with_telegram_environment(monkeypatch, tmp_path) -
     monkeypatch.delenv("TELEGRAM_EXISTING_BREAKOUT_CHAT_ID", raising=False)
     monkeypatch.delenv("TELEGRAM_FIVE_MINUTE_DROP_CHAT_ID", raising=False)
     monkeypatch.delenv("TELEGRAM_5M_DROP_CHAT_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_CONTINUOUS_BREAKOUT_CHAT_ID", raising=False)
     config_path = tmp_path / "config.toml"
     shutil.copyfile("config.example.toml", config_path)
 
@@ -28,6 +29,9 @@ def test_example_config_loads_with_telegram_environment(monkeypatch, tmp_path) -
     assert config.telegram.new_breakout_chat_id == ""
     assert config.telegram.existing_breakout_chat_id == ""
     assert config.telegram.five_minute_drop_chat_id == ""
+    assert config.telegram.continuous_breakout_chat_id == ""
+    assert config.continuous_breakout_enabled is False
+    assert config.continuous_breakout_watch_days == 7
     assert config.five_minute_drop_enabled is False
     assert config.five_minute_drop_percent == 5.0
     assert config.five_minute_drop_watch_days == 7
@@ -43,6 +47,7 @@ def test_split_breakout_chat_ids_can_replace_default_chat_id(monkeypatch, tmp_pa
     monkeypatch.setenv("TELEGRAM_EXISTING_BREAKOUT_CHAT_ID", "existing-chat")
     monkeypatch.delenv("TELEGRAM_FIVE_MINUTE_DROP_CHAT_ID", raising=False)
     monkeypatch.delenv("TELEGRAM_5M_DROP_CHAT_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_CONTINUOUS_BREAKOUT_CHAT_ID", raising=False)
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         """
@@ -78,6 +83,7 @@ def test_breakout_summary_interval_accepts_half_hour(monkeypatch, tmp_path) -> N
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
     monkeypatch.delenv("TELEGRAM_FIVE_MINUTE_DROP_CHAT_ID", raising=False)
     monkeypatch.delenv("TELEGRAM_5M_DROP_CHAT_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_CONTINUOUS_BREAKOUT_CHAT_ID", raising=False)
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         """
@@ -112,6 +118,7 @@ def test_missing_telegram_config_reports_clear_error(monkeypatch, tmp_path) -> N
     monkeypatch.delenv("TELEGRAM_EXISTING_BREAKOUT_CHAT_ID", raising=False)
     monkeypatch.delenv("TELEGRAM_FIVE_MINUTE_DROP_CHAT_ID", raising=False)
     monkeypatch.delenv("TELEGRAM_5M_DROP_CHAT_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_CONTINUOUS_BREAKOUT_CHAT_ID", raising=False)
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         """
@@ -143,6 +150,7 @@ def test_exchange_must_be_supported(monkeypatch, tmp_path) -> None:
     monkeypatch.delenv("TELEGRAM_EXISTING_BREAKOUT_CHAT_ID", raising=False)
     monkeypatch.delenv("TELEGRAM_FIVE_MINUTE_DROP_CHAT_ID", raising=False)
     monkeypatch.delenv("TELEGRAM_5M_DROP_CHAT_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_CONTINUOUS_BREAKOUT_CHAT_ID", raising=False)
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         """
@@ -175,6 +183,7 @@ def test_five_minute_drop_chat_id_uses_environment(monkeypatch, tmp_path) -> Non
     monkeypatch.setenv("TELEGRAM_EXISTING_BREAKOUT_CHAT_ID", "existing-chat")
     monkeypatch.setenv("TELEGRAM_FIVE_MINUTE_DROP_CHAT_ID", "drop-chat")
     monkeypatch.delenv("TELEGRAM_5M_DROP_CHAT_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_CONTINUOUS_BREAKOUT_CHAT_ID", raising=False)
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         """
@@ -203,3 +212,41 @@ five_minute_drop_chat_id = ""
 
     assert config.five_minute_drop_enabled is True
     assert config.telegram.five_minute_drop_chat_id == "drop-chat"
+
+
+def test_continuous_breakout_chat_id_uses_environment(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    monkeypatch.setenv("TELEGRAM_NEW_BREAKOUT_CHAT_ID", "new-chat")
+    monkeypatch.setenv("TELEGRAM_EXISTING_BREAKOUT_CHAT_ID", "existing-chat")
+    monkeypatch.setenv("TELEGRAM_CONTINUOUS_BREAKOUT_CHAT_ID", "continuous-chat")
+    monkeypatch.delenv("TELEGRAM_FIVE_MINUTE_DROP_CHAT_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_5M_DROP_CHAT_ID", raising=False)
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+monitor_all = false
+symbols = ["BTC-USDT-SWAP"]
+check_interval_minutes = 15
+continuous_breakout_enabled = true
+threshold_days = 10
+threshold_refresh_time = "00:05"
+timezone = "UTC"
+state_path = "data/state.json"
+log_file = "logs/monitor.log"
+log_level = "INFO"
+
+[telegram]
+bot_token = ""
+chat_id = ""
+new_breakout_chat_id = ""
+existing_breakout_chat_id = ""
+continuous_breakout_chat_id = ""
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.continuous_breakout_enabled is True
+    assert config.telegram.continuous_breakout_chat_id == "continuous-chat"

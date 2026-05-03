@@ -17,6 +17,7 @@ class TelegramNotifier:
 
     BREAKOUT_SUMMARY_MAX_CHARS = 3500
     FIVE_MINUTE_DROP_MAX_CHARS = 3500
+    CONTINUOUS_BREAKOUT_MAX_CHARS = 3500
 
     def __init__(self, config: TelegramConfig, timeout: float = 20.0) -> None:
         self.config = config
@@ -67,6 +68,19 @@ class TelegramNotifier:
             ok = self._send_text(chunk, context, chat_id=chat_id) and ok
         return ok
 
+    def send_continuous_breakout_alerts(self, alerts: list[dict], alert_time: datetime) -> bool:
+        """发送连续突破提醒。"""
+        if not alerts:
+            return True
+
+        chat_id = self.config.chat_id_for_continuous_breakout()
+        chunks = self._chunk_continuous_breakout_alerts(alerts)
+        ok = True
+        for index, chunk in enumerate(chunks, start=1):
+            context = f"continuous breakout alerts {len(alerts)} symbols chunk {index}/{len(chunks)}"
+            ok = self._send_text(chunk, context, chat_id=chat_id) and ok
+        return ok
+
     def _format_breakout_line(self, item: dict) -> str:
         _, percent = breakout_delta(item["current_price"], item["threshold"])
         ordinal = item.get("breakout_ordinal")
@@ -78,6 +92,14 @@ class TelegramNotifier:
         return (
             f"{item['symbol']}  {item['open_price']:g} -> {item['close_price']:g}  "
             f"({percent:+.2f}%)"
+        )
+
+    def _format_continuous_breakout_line(self, item: dict) -> str:
+        _, percent = breakout_delta(item["current_price"], item["threshold"])
+        previous = str(item.get("previous_breakout_time", "")).replace("T", " ")[:19]
+        return (
+            f"{item['symbol']}  {item['current_price']:g} > {item['threshold']:g}  "
+            f"({percent:+.2f}%)  上次: {previous}"
         )
 
     def _chunk_breakout_sections(
@@ -127,6 +149,29 @@ class TelegramNotifier:
             line = self._format_five_minute_drop_line(item)
             candidate = "\n".join(current_lines + [line]).strip()
             if len(candidate) > self.FIVE_MINUTE_DROP_MAX_CHARS and len(current_lines) > len(header):
+                chunks.append("\n".join(current_lines).strip())
+                current_lines = header + [line]
+            else:
+                current_lines.append(line)
+
+        final_text = "\n".join(current_lines).strip()
+        if not chunks:
+            return [final_text]
+
+        chunks.append(final_text)
+        total_chunks = len(chunks)
+        return [f"[{index}/{total_chunks}]\n{chunk}" for index, chunk in enumerate(chunks, start=1)]
+
+    def _chunk_continuous_breakout_alerts(self, alerts: list[dict]) -> list[str]:
+        """按 Telegram 长度限制拆分连续突破提醒。"""
+        header = [f"[连续突破] {len(alerts)}个", "最近突破过的币再次突破"]
+        chunks: list[str] = []
+        current_lines = header[:]
+
+        for item in alerts:
+            line = self._format_continuous_breakout_line(item)
+            candidate = "\n".join(current_lines + [line]).strip()
+            if len(candidate) > self.CONTINUOUS_BREAKOUT_MAX_CHARS and len(current_lines) > len(header):
                 chunks.append("\n".join(current_lines).strip())
                 current_lines = header + [line]
             else:

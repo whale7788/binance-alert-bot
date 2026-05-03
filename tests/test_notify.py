@@ -221,6 +221,43 @@ def test_telegram_notifier_sends_five_minute_drop_alerts_to_drop_chat(monkeypatc
     assert "BTCUSDT  100 -> 94.5  (-5.50%)" in payloads[0]["text"]
 
 
+def test_telegram_notifier_sends_continuous_breakout_alerts_to_continuous_chat(monkeypatch) -> None:
+    payloads: list[dict] = []
+
+    def fake_post(*args, **kwargs):
+        payloads.append(kwargs["json"])
+        return make_response(200, json={"ok": True})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    notifier = TelegramNotifier(
+        TelegramConfig(
+            bot_token="token",
+            chat_id="fallback-chat",
+            continuous_breakout_chat_id="continuous-chat",
+        )
+    )
+
+    assert (
+        notifier.send_continuous_breakout_alerts(
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "current_price": 101.0,
+                    "threshold": 100.0,
+                    "previous_breakout_time": "2026-04-10T08:30:00+00:00",
+                }
+            ],
+            datetime(2026, 4, 11, 8, 30),
+        )
+        is True
+    )
+
+    assert [payload["chat_id"] for payload in payloads] == ["continuous-chat"]
+    assert "[连续突破] 1个" in payloads[0]["text"]
+    assert "BTCUSDT  101 > 100  (+1.00%)" in payloads[0]["text"]
+    assert "上次: 2026-04-10 08:30:00" in payloads[0]["text"]
+
+
 def test_telegram_notifier_keeps_display_order_but_uses_first_breakout_ordinal(monkeypatch) -> None:
     calls: list[str] = []
 
