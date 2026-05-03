@@ -8,6 +8,10 @@ class _FakeDateTime:
     def now(tz=None):
         return __import__("datetime").datetime(2024, 4, 30, 0, 4, tzinfo=tz)
 
+    @staticmethod
+    def fromtimestamp(timestamp, tz=None):
+        return __import__("datetime").datetime.fromtimestamp(timestamp, tz=tz)
+
 
 def test_get_daily_highs_skips_today_unfinished_candle(monkeypatch) -> None:
     """Binance 只在最后一根日 K 仍未收线时跳过它。"""
@@ -77,6 +81,53 @@ def test_get_current_prices_uses_bulk_ticker_endpoint_and_filters_symbols() -> N
 
     assert captured["call"]["path"] == "/fapi/v1/ticker/price"
     assert prices == {"BTCUSDT": 100000.0}
+
+
+def test_binance_get_recent_klines_returns_completed_klines(monkeypatch) -> None:
+    client = BinanceFuturesClient()
+    monkeypatch.setattr("binance_alert_bot.exchange.datetime", _FakeDateTime)
+    payload = [
+        [1714434600000, "100.0", "0", "0", "96.0", "0", 1714434899999, "0", "0", "0", "0", "0"],
+        [1714434900000, "96.0", "0", "0", "90.0", "0", 1714435199999, "0", "0", "0", "0", "0"],
+        [1714435200000, "90.0", "0", "0", "88.0", "0", 1714435499999, "0", "0", "0", "0", "0"],
+    ]
+    captured: dict[str, dict[str, str]] = {}
+
+    def fake_get_json(path, params):
+        captured["call"] = {"path": path, **params}
+        return payload
+
+    client._get_json = fake_get_json  # type: ignore[method-assign]
+
+    klines = client.get_recent_klines("BTC-USDT-SWAP", interval="5m", limit=2)
+
+    assert captured["call"]["path"] == "/fapi/v1/klines"
+    assert captured["call"]["symbol"] == "BTCUSDT"
+    assert captured["call"]["interval"] == "5m"
+    assert captured["call"]["limit"] == "3"
+    assert [(kline.open_price, kline.close_price) for kline in klines] == [(100.0, 96.0), (96.0, 90.0)]
+
+
+def test_binance_get_latest_kline_keeps_unfinished_current_kline() -> None:
+    client = BinanceFuturesClient()
+    payload = [
+        [1714435200000, "100.0", "0", "0", "94.0", "0", 1714435499999, "0", "0", "0", "0", "0"],
+    ]
+    captured: dict[str, dict[str, str]] = {}
+
+    def fake_get_json(path, params):
+        captured["call"] = {"path": path, **params}
+        return payload
+
+    client._get_json = fake_get_json  # type: ignore[method-assign]
+
+    kline = client.get_latest_kline("BTC-USDT-SWAP", interval="5m")
+
+    assert captured["call"]["path"] == "/fapi/v1/klines"
+    assert captured["call"]["symbol"] == "BTCUSDT"
+    assert captured["call"]["interval"] == "5m"
+    assert captured["call"]["limit"] == "1"
+    assert (kline.open_price, kline.close_price) == (100.0, 94.0)
 
 
 def test_get_json_retries_on_429_then_succeeds(monkeypatch) -> None:
@@ -180,3 +231,54 @@ def test_okx_get_current_prices_uses_bulk_ticker_endpoint_and_filters_symbols() 
 
     assert captured["call"]["path"] == "/api/v5/market/tickers"
     assert prices == {"BTC-USDT-SWAP": 100000.0}
+
+
+def test_okx_get_recent_klines_returns_completed_klines_sorted_oldest_first() -> None:
+    client = OkxClient()
+    payload = {
+        "code": "0",
+        "data": [
+            ["1714434900000", "96.0", "0", "0", "90.0", "0", "0", "0", "1"],
+            ["1714434600000", "100.0", "0", "0", "96.0", "0", "0", "0", "1"],
+            ["1714435200000", "90.0", "0", "0", "88.0", "0", "0", "0", "0"],
+        ],
+    }
+    captured: dict[str, dict[str, str]] = {}
+
+    def fake_get_json(path, params):
+        captured["call"] = {"path": path, **params}
+        return payload
+
+    client._get_json = fake_get_json  # type: ignore[method-assign]
+
+    klines = client.get_recent_klines("BTC-USDT-SWAP", interval="5m", limit=2)
+
+    assert captured["call"]["path"] == "/api/v5/market/history-candles"
+    assert captured["call"]["instId"] == "BTC-USDT-SWAP"
+    assert captured["call"]["bar"] == "5m"
+    assert [(kline.open_price, kline.close_price) for kline in klines] == [(100.0, 96.0), (96.0, 90.0)]
+
+
+def test_okx_get_latest_kline_keeps_unfinished_current_kline() -> None:
+    client = OkxClient()
+    payload = {
+        "code": "0",
+        "data": [
+            ["1714435200000", "100.0", "0", "0", "94.0", "0", "0", "0", "0"],
+        ],
+    }
+    captured: dict[str, dict[str, str]] = {}
+
+    def fake_get_json(path, params):
+        captured["call"] = {"path": path, **params}
+        return payload
+
+    client._get_json = fake_get_json  # type: ignore[method-assign]
+
+    kline = client.get_latest_kline("BTC-USDT-SWAP", interval="5m")
+
+    assert captured["call"]["path"] == "/api/v5/market/candles"
+    assert captured["call"]["instId"] == "BTC-USDT-SWAP"
+    assert captured["call"]["bar"] == "5m"
+    assert captured["call"]["limit"] == "1"
+    assert (kline.open_price, kline.close_price) == (100.0, 94.0)

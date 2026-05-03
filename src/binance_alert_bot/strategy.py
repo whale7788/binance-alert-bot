@@ -18,3 +18,15 @@ def breakout_delta(current_price: float, threshold: float) -> tuple[float, float
     delta = current_price - threshold
     percent = (delta / threshold) * 100 if threshold else 0.0
     return delta, percent
+
+
+def candle_change_percent(open_price: float, close_price: float) -> float:
+    """返回单根 K 线从开盘到收盘的涨跌幅。"""
+    if open_price <= 0:
+        raise ValueError("open_price must be greater than 0")
+    return ((close_price - open_price) / open_price) * 100
+
+
+def is_single_candle_drop(open_price: float, close_price: float, threshold_percent: float) -> bool:
+    """判断单根 K 线跌幅是否达到阈值。"""
+    return candle_change_percent(open_price, close_price) <= -abs(threshold_percent)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -13,7 +14,7 @@ from .config import AppConfig
 from .exchange import ExchangeClient
 from .notify import TelegramNotifier
 from .state import MonitorState, StateStore
-from .strategy import breakout_delta, calculate_threshold, is_breakout
+from .strategy import breakout_delta, calculate_threshold, candle_change_percent, is_breakout, is_single_candle_drop
 
 
 LOGGER = logging.getLogger(__name__)
@@ -75,12 +76,25 @@ class BreakoutMonitor:
                 id="breakout-summary",
                 replace_existing=True,
             )
+        if self.config.five_minute_drop_enabled:
+            self.scheduler.add_job(
+                self.check_five_minute_drops,
+                IntervalTrigger(
+                    seconds=self.config.five_minute_drop_check_interval_seconds,
+                    timezone=self.config.zoneinfo,
+                ),
+                id="five-minute-drop-check",
+                replace_existing=True,
+                next_run_time=self._now(),
+            )
         self.scheduler.start()
         LOGGER.info(
-            "Scheduler started: refresh_time=%s, check_interval_minutes=%d, breakout_summary_interval_hours=%g",
+            "Scheduler started: refresh_time=%s, check_interval_minutes=%d, breakout_summary_interval_hours=%g, "
+            "five_minute_drop_enabled=%s",
             refresh_time.strftime("%H:%M"),
             self.config.check_interval_minutes,
             self.config.breakout_summary_interval_hours,
+            self.config.five_minute_drop_enabled,
         )
 
     def run_forever(self) -> None:
@@ -226,11 +240,113 @@ class BreakoutMonitor:
 
         if self.notifier.send_breakout_summary(notification_breakouts, now):
             for item in new_breakouts:
-                state.mark_notified(str(item["symbol"]), now)
+                symbol = str(item["symbol"])
+                state.mark_notified(symbol, now)
+                state.record_breakout_watch(symbol, now)
             self._save_state(f"breakout summary for {len(new_breakouts)} symbols")
             LOGGER.info("Breakout summary sent and state updated for %d new symbols", len(new_breakouts))
         else:
             LOGGER.error("Breakout summary notification failed; state not marked as notified")
+
+    def check_five_minute_drops(self) -> None:
+        """监控突破池里币种的当前 5m K 线盘中急跌。"""
+        if not self.config.five_minute_drop_enabled:
+            LOGGER.info("Skipping 5m drop check because it is disabled")
+            return
+
+        now = self._now()
+        state = self._state()
+        removed = state.prune_breakout_watchlist(now, self.config.five_minute_drop_watch_days)
+        if removed:
+            LOGGER.info("Pruned %d symbols from 5m drop watchlist", removed)
+
+        if not state.breakout_watchlist:
+            LOGGER.info("No symbols in 5m drop watchlist")
+            if removed:
+                self._save_state("5m drop watchlist pruning")
+            return
+
+        watch_items = list(state.breakout_watchlist.items())
+        max_workers = min(self.config.five_minute_drop_max_workers, len(watch_items))
+        alerts_by_symbol: dict[str, dict[str, float | str | datetime]] = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    self._build_five_minute_drop_alert,
+                    symbol,
+                    watch_state.last_drop_alert_kline_open_time,
+                ): symbol
+                for symbol, watch_state in watch_items
+            }
+            for future in as_completed(futures):
+                symbol = futures[future]
+                try:
+                    alert = future.result()
+                except Exception:
+                    LOGGER.exception("Failed to check 5m drop for %s; continuing with remaining symbols", symbol)
+                    continue
+                if alert is not None:
+                    alerts_by_symbol[symbol] = alert
+
+        alerts = [alerts_by_symbol[symbol] for symbol, _ in watch_items if symbol in alerts_by_symbol]
+
+        LOGGER.info(
+            "5m drop check complete: watchlist=%d removed=%d workers=%d alerts=%d",
+            len(state.breakout_watchlist),
+            removed,
+            max_workers,
+            len(alerts),
+        )
+        if not alerts:
+            if removed:
+                self._save_state("5m drop watchlist pruning")
+            return
+
+        if self.notifier.send_five_minute_drop_alerts(alerts, now):
+            for item in alerts:
+                state.mark_drop_alerted(str(item["symbol"]), item["kline_open_time"])
+            self._save_state(f"5m drop alerts for {len(alerts)} symbols")
+            LOGGER.info("5m drop alerts sent and state updated for %d symbols", len(alerts))
+        else:
+            LOGGER.error("5m drop alert notification failed; alert state not updated")
+            if removed:
+                self._save_state("5m drop watchlist pruning")
+
+    def _build_five_minute_drop_alert(
+        self,
+        symbol: str,
+        last_drop_alert_kline_open_time: str | None,
+    ) -> dict[str, float | str | datetime] | None:
+        """读取当前 5m K 线并判断是否需要急跌预警。"""
+        latest_kline = self.exchange.get_latest_kline(symbol, interval="5m")
+        kline_open_time = latest_kline.open_time.isoformat()
+        if last_drop_alert_kline_open_time == kline_open_time:
+            return None
+
+        percent = candle_change_percent(latest_kline.open_price, latest_kline.close_price)
+        LOGGER.debug(
+            "5m intrabar drop check: symbol=%s open=%g current=%g pct=%+.2f threshold=-%g kline_open=%s",
+            symbol,
+            latest_kline.open_price,
+            latest_kline.close_price,
+            percent,
+            self.config.five_minute_drop_percent,
+            kline_open_time,
+        )
+        if not is_single_candle_drop(
+            latest_kline.open_price,
+            latest_kline.close_price,
+            self.config.five_minute_drop_percent,
+        ):
+            return None
+
+        return {
+            "symbol": symbol,
+            "open_price": latest_kline.open_price,
+            "close_price": latest_kline.close_price,
+            "drop_percent": percent,
+            "kline_open_time": latest_kline.open_time,
+        }
 
     def send_periodic_summary(self) -> None:
         """定时推送今日已突破币种的最新涨幅概览。"""
@@ -268,7 +384,7 @@ class BreakoutMonitor:
         symbols = self._apply_ignored_symbols(symbols)
 
         if self.config.monitor_all:
-            LOGGER.info("Monitoring all OKX USDT perpetual symbols: count=%d", len(symbols))
+            LOGGER.info("Monitoring all %s USDT perpetual symbols: count=%d", self.config.exchange.upper(), len(symbols))
         else:
             LOGGER.info("Monitoring configured symbol whitelist: %s", ", ".join(symbols))
         return symbols

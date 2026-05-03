@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -38,12 +38,40 @@ class SymbolState:
 
 
 @dataclass
+class BreakoutWatchState:
+    """一周急跌监控池里的单个币种状态。"""
+
+    first_breakout_time: str
+    last_breakout_time: str
+    last_drop_alert_kline_open_time: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "BreakoutWatchState":
+        """从 JSON 结构恢复 BreakoutWatchState。"""
+        first_breakout_time = str(data.get("firstBreakoutTime") or data["lastBreakoutTime"])
+        return cls(
+            first_breakout_time=first_breakout_time,
+            last_breakout_time=str(data["lastBreakoutTime"]),
+            last_drop_alert_kline_open_time=data.get("lastDropAlertKlineOpenTime"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """把 BreakoutWatchState 序列化成 JSON 结构。"""
+        return {
+            "firstBreakoutTime": self.first_breakout_time,
+            "lastBreakoutTime": self.last_breakout_time,
+            "lastDropAlertKlineOpenTime": self.last_drop_alert_kline_open_time,
+        }
+
+
+@dataclass
 class MonitorState:
     """当前交易日的持久化状态。"""
 
     date: str
     last_threshold_refresh_time: str | None = None
     symbols: dict[str, SymbolState] = field(default_factory=dict)
+    breakout_watchlist: dict[str, BreakoutWatchState] = field(default_factory=dict)
 
     @classmethod
     def empty(cls, today: str) -> "MonitorState":
@@ -57,10 +85,15 @@ class MonitorState:
             symbol.upper(): SymbolState.from_dict(symbol_data)
             for symbol, symbol_data in data.get("symbols", {}).items()
         }
+        breakout_watchlist = {
+            symbol.upper(): BreakoutWatchState.from_dict(symbol_data)
+            for symbol, symbol_data in data.get("breakoutWatchlist", {}).items()
+        }
         return cls(
             date=str(data["date"]),
             last_threshold_refresh_time=data.get("lastThresholdRefreshTime"),
             symbols=symbols,
+            breakout_watchlist=breakout_watchlist,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -69,6 +102,9 @@ class MonitorState:
             "date": self.date,
             "lastThresholdRefreshTime": self.last_threshold_refresh_time,
             "symbols": {symbol: state.to_dict() for symbol, state in sorted(self.symbols.items())},
+            "breakoutWatchlist": {
+                symbol: state.to_dict() for symbol, state in sorted(self.breakout_watchlist.items())
+            },
         }
 
     def needs_refresh(self, today: str, symbols: list[str], ignore_missing_symbols: bool = False) -> bool:
@@ -102,6 +138,39 @@ class MonitorState:
         if self.symbols[symbol].first_breakout_time is None:
             self.symbols[symbol].first_breakout_time = notified_at.isoformat()
         self.symbols[symbol].last_notify_time = notified_at.isoformat()
+
+    def record_breakout_watch(self, symbol: str, breakout_at: datetime) -> None:
+        """把突破币种加入一周急跌监控池。"""
+        normalized = symbol.upper()
+        breakout_time = breakout_at.isoformat()
+        previous = self.breakout_watchlist.get(normalized)
+        if previous is None:
+            self.breakout_watchlist[normalized] = BreakoutWatchState(
+                first_breakout_time=breakout_time,
+                last_breakout_time=breakout_time,
+            )
+            return
+        previous.last_breakout_time = breakout_time
+
+    def prune_breakout_watchlist(self, now: datetime, watch_days: int) -> int:
+        """移除超过保留天数没有再次突破的币种。"""
+        cutoff = now - timedelta(days=watch_days)
+        removed = 0
+        for symbol, watch_state in list(self.breakout_watchlist.items()):
+            try:
+                last_breakout_time = datetime.fromisoformat(watch_state.last_breakout_time)
+            except ValueError:
+                last_breakout_time = datetime.min.replace(tzinfo=now.tzinfo)
+            if last_breakout_time.tzinfo is None and cutoff.tzinfo is not None:
+                last_breakout_time = last_breakout_time.replace(tzinfo=cutoff.tzinfo)
+            if last_breakout_time < cutoff:
+                del self.breakout_watchlist[symbol]
+                removed += 1
+        return removed
+
+    def mark_drop_alerted(self, symbol: str, kline_open_time: datetime) -> None:
+        """记录某个币种的某根 5m K 线已经发过急跌提醒。"""
+        self.breakout_watchlist[symbol.upper()].last_drop_alert_kline_open_time = kline_open_time.isoformat()
 
     @staticmethod
     def _build_symbol_state(symbol: str, threshold: float, previous: SymbolState | None) -> SymbolState:

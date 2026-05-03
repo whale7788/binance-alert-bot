@@ -6,7 +6,7 @@ from datetime import datetime
 import httpx
 
 from .config import TelegramConfig
-from .strategy import breakout_delta
+from .strategy import breakout_delta, candle_change_percent
 
 
 LOGGER = logging.getLogger(__name__)
@@ -16,6 +16,7 @@ class TelegramNotifier:
     """负责把突破提醒发送到 Telegram。"""
 
     BREAKOUT_SUMMARY_MAX_CHARS = 3500
+    FIVE_MINUTE_DROP_MAX_CHARS = 3500
 
     def __init__(self, config: TelegramConfig, timeout: float = 20.0) -> None:
         self.config = config
@@ -53,11 +54,31 @@ class TelegramNotifier:
                 ok = self._send_text(chunk, context, chat_id=chat_id) and ok
         return ok
 
+    def send_five_minute_drop_alerts(self, alerts: list[dict], alert_time: datetime) -> bool:
+        """发送 5 分钟盘中急跌预警。"""
+        if not alerts:
+            return True
+
+        chat_id = self.config.chat_id_for_five_minute_drop()
+        chunks = self._chunk_five_minute_drop_alerts(alerts)
+        ok = True
+        for index, chunk in enumerate(chunks, start=1):
+            context = f"5m drop alerts {len(alerts)} symbols chunk {index}/{len(chunks)}"
+            ok = self._send_text(chunk, context, chat_id=chat_id) and ok
+        return ok
+
     def _format_breakout_line(self, item: dict) -> str:
         _, percent = breakout_delta(item["current_price"], item["threshold"])
         ordinal = item.get("breakout_ordinal")
         prefix = "" if ordinal is None else f"[第{int(ordinal)}个突破] "
         return f"{prefix}{item['symbol']}  {item['current_price']:g} > {item['threshold']:g}  ({percent:+.2f}%)"
+
+    def _format_five_minute_drop_line(self, item: dict) -> str:
+        percent = candle_change_percent(item["open_price"], item["close_price"])
+        return (
+            f"{item['symbol']}  {item['open_price']:g} -> {item['close_price']:g}  "
+            f"({percent:+.2f}%)"
+        )
 
     def _chunk_breakout_sections(
         self,
@@ -87,6 +108,29 @@ class TelegramNotifier:
                 else:
                     current_lines.extend(addition)
                 current_section = heading
+
+        final_text = "\n".join(current_lines).strip()
+        if not chunks:
+            return [final_text]
+
+        chunks.append(final_text)
+        total_chunks = len(chunks)
+        return [f"[{index}/{total_chunks}]\n{chunk}" for index, chunk in enumerate(chunks, start=1)]
+
+    def _chunk_five_minute_drop_alerts(self, alerts: list[dict]) -> list[str]:
+        """按 Telegram 长度限制拆分 5 分钟急跌提醒。"""
+        header = [f"[5分钟急跌预警] {len(alerts)}个", "当前5m K线"]
+        chunks: list[str] = []
+        current_lines = header[:]
+
+        for item in alerts:
+            line = self._format_five_minute_drop_line(item)
+            candidate = "\n".join(current_lines + [line]).strip()
+            if len(candidate) > self.FIVE_MINUTE_DROP_MAX_CHARS and len(current_lines) > len(header):
+                chunks.append("\n".join(current_lines).strip())
+                current_lines = header + [line]
+            else:
+                current_lines.append(line)
 
         final_text = "\n".join(current_lines).strip()
         if not chunks:

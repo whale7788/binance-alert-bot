@@ -7,6 +7,11 @@ ignored_symbols = ["INTC-USDT-SWAP", "SNDK-USDT-SWAP", "CRWV-USDT-SWAP"]
 check_interval_minutes = 15
 # Supports decimals: 0.5 means every 30 minutes.
 breakout_summary_interval_hours = 4
+five_minute_drop_enabled = false
+five_minute_drop_percent = 5
+five_minute_drop_watch_days = 7
+five_minute_drop_check_interval_seconds = 15
+five_minute_drop_max_workers = 20
 threshold_days = 10
 threshold_refresh_time = "00:05"
 timezone = "UTC"
@@ -19,8 +24,10 @@ log_level = "INFO"
 # Prefer environment variables for secrets:
 # TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID
 # Optional split channels for one bot:
-# TELEGRAM_NEW_BREAKOUT_CHAT_ID and TELEGRAM_EXISTING_BREAKOUT_CHAT_ID
+# TELEGRAM_NEW_BREAKOUT_CHAT_ID, TELEGRAM_EXISTING_BREAKOUT_CHAT_ID,
+# and TELEGRAM_FIVE_MINUTE_DROP_CHAT_ID
 bot_token = ""
 chat_id = ""
 new_breakout_chat_id = ""
 existing_breakout_chat_id = ""
+five_minute_drop_chat_id = ""

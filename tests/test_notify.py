@@ -186,6 +186,41 @@ def test_telegram_notifier_routes_breakout_statuses_to_split_chats(monkeypatch) 
     assert "BTC-USDT-SWAP" not in payloads[1]["text"]
 
 
+def test_telegram_notifier_sends_five_minute_drop_alerts_to_drop_chat(monkeypatch) -> None:
+    payloads: list[dict] = []
+
+    def fake_post(*args, **kwargs):
+        payloads.append(kwargs["json"])
+        return make_response(200, json={"ok": True})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    notifier = TelegramNotifier(
+        TelegramConfig(
+            bot_token="token",
+            chat_id="fallback-chat",
+            five_minute_drop_chat_id="drop-chat",
+        )
+    )
+
+    assert (
+        notifier.send_five_minute_drop_alerts(
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "open_price": 100.0,
+                    "close_price": 94.5,
+                }
+            ],
+            datetime(2026, 4, 11, 8, 30),
+        )
+        is True
+    )
+
+    assert [payload["chat_id"] for payload in payloads] == ["drop-chat"]
+    assert "[5分钟急跌预警] 1个" in payloads[0]["text"]
+    assert "BTCUSDT  100 -> 94.5  (-5.50%)" in payloads[0]["text"]
+
+
 def test_telegram_notifier_keeps_display_order_but_uses_first_breakout_ordinal(monkeypatch) -> None:
     calls: list[str] = []
 

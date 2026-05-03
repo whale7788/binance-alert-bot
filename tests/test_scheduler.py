@@ -1,3 +1,5 @@
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -5,8 +7,9 @@ from zoneinfo import ZoneInfo
 from apscheduler.triggers.interval import IntervalTrigger
 
 from binance_alert_bot.config import AppConfig, TelegramConfig
+from binance_alert_bot.exchange import Kline
 from binance_alert_bot.scheduler import BreakoutMonitor
-from binance_alert_bot.state import MonitorState, StateStore, SymbolState
+from binance_alert_bot.state import BreakoutWatchState, MonitorState, StateStore, SymbolState
 
 
 class FakeExchange:
@@ -15,11 +18,20 @@ class FakeExchange:
         prices: dict[str, float] | None = None,
         failing_price_symbol: str | None = None,
         daily_highs: dict[str, list[float]] | None = None,
+        klines: dict[str, list[Kline]] | None = None,
+        kline_delay_seconds: float = 0,
     ) -> None:
         self.prices = prices or {}
         self.failing_price_symbol = failing_price_symbol
         self.daily_highs = daily_highs or {}
+        self.klines = klines or {}
+        self.kline_delay_seconds = kline_delay_seconds
         self.daily_high_calls = 0
+        self.kline_calls: list[tuple[str, str, int]] = []
+        self.latest_kline_calls: list[tuple[str, str]] = []
+        self.latest_kline_lock = threading.Lock()
+        self.active_latest_kline_calls = 0
+        self.max_active_latest_kline_calls = 0
         self.closed = False
 
     def close(self) -> None:
@@ -51,18 +63,43 @@ class FakeExchange:
             prices[symbol] = self.prices[symbol]
         return prices
 
+    def get_recent_klines(self, symbol: str, interval: str, limit: int = 2) -> list[Kline]:
+        self.kline_calls.append((symbol, interval, limit))
+        return self.klines.get(symbol, [])[-limit:]
+
+    def get_latest_kline(self, symbol: str, interval: str) -> Kline:
+        self.latest_kline_calls.append((symbol, interval))
+        with self.latest_kline_lock:
+            self.active_latest_kline_calls += 1
+            self.max_active_latest_kline_calls = max(
+                self.max_active_latest_kline_calls,
+                self.active_latest_kline_calls,
+            )
+        try:
+            if self.kline_delay_seconds:
+                time.sleep(self.kline_delay_seconds)
+            return self.klines[symbol][-1]
+        finally:
+            with self.latest_kline_lock:
+                self.active_latest_kline_calls -= 1
+
 
 class FakeNotifier:
     def __init__(self, success: bool = True) -> None:
         self.success = success
         self.sent: list[list[tuple[str, str]]] = []
         self.sent_with_ordinals: list[list[tuple[str, str, int | None]]] = []
+        self.drop_alerts: list[list[tuple[str, float, float]]] = []
 
     def send_breakout_summary(self, breakouts, breakout_time) -> bool:
         self.sent.append([(item["symbol"], item["status"]) for item in breakouts])
         self.sent_with_ordinals.append(
             [(item["symbol"], item["status"], item.get("breakout_ordinal")) for item in breakouts]
         )
+        return self.success
+
+    def send_five_minute_drop_alerts(self, alerts, alert_time) -> bool:
+        self.drop_alerts.append([(item["symbol"], item["open_price"], item["close_price"]) for item in alerts])
         return self.success
 
 
@@ -111,6 +148,7 @@ def test_breakout_sends_once_per_day(tmp_path) -> None:
     assert notifier.sent == [[("BTC-USDT-SWAP", "新突破")]]
     assert monitor.state is not None
     assert monitor.state.symbols["BTC-USDT-SWAP"].notified is True
+    assert "BTC-USDT-SWAP" in monitor.state.breakout_watchlist
 
 
 def test_notification_failure_does_not_mark_notified(tmp_path) -> None:
@@ -277,6 +315,184 @@ def test_start_schedules_half_hour_periodic_summary(tmp_path) -> None:
         assert job.trigger.interval.total_seconds() == 30 * 60
     finally:
         monitor.shutdown()
+
+
+def test_start_schedules_five_minute_drop_monitor_when_enabled(tmp_path) -> None:
+    config = make_config(tmp_path).model_copy(update={"five_minute_drop_enabled": True})
+    monitor = BreakoutMonitor(
+        config,
+        FakeExchange(prices={"BTC-USDT-SWAP": 9.0}),
+        FakeNotifier(success=True),
+        StateStore(config.state_path),
+    )
+    monitor.initialize()
+
+    monitor.start()
+
+    try:
+        job = monitor.scheduler.get_job("five-minute-drop-check")
+        assert job is not None
+        assert isinstance(job.trigger, IntervalTrigger)
+        assert job.trigger.interval.total_seconds() == 15
+    finally:
+        monitor.shutdown()
+
+
+def test_five_minute_drop_alerts_on_current_intrabar_kline(tmp_path) -> None:
+    config = make_config(tmp_path).model_copy(update={"five_minute_drop_enabled": True})
+    notifier = FakeNotifier(success=True)
+    exchange = FakeExchange(
+        prices={"BTC-USDT-SWAP": 16.0},
+        klines={
+            "BTC-USDT-SWAP": [
+                Kline(
+                    open_time=datetime.fromisoformat("2026-04-18T00:00:00+00:00"),
+                    open_price=100.0,
+                    close_price=94.0,
+                )
+            ]
+        },
+    )
+    monitor = BreakoutMonitor(config, exchange, notifier, StateStore(config.state_path))
+    monitor.initialize()
+    monitor.check_prices()
+
+    monitor.check_five_minute_drops()
+
+    assert notifier.drop_alerts == [[("BTC-USDT-SWAP", 100.0, 94.0)]]
+    assert monitor.state is not None
+    assert (
+        monitor.state.breakout_watchlist["BTC-USDT-SWAP"].last_drop_alert_kline_open_time
+        == "2026-04-18T00:00:00+00:00"
+    )
+
+
+def test_five_minute_drop_does_not_alert_twice_for_same_kline(tmp_path) -> None:
+    config = make_config(tmp_path).model_copy(update={"five_minute_drop_enabled": True})
+    notifier = FakeNotifier(success=True)
+    exchange = FakeExchange(
+        klines={
+            "BTC-USDT-SWAP": [
+                Kline(
+                    open_time=datetime.fromisoformat("2026-04-18T00:00:00+00:00"),
+                    open_price=100.0,
+                    close_price=94.0,
+                )
+            ]
+        }
+    )
+    monitor = BreakoutMonitor(config, exchange, notifier, StateStore(config.state_path))
+    monitor.state = MonitorState(
+        date="2026-04-18",
+        breakout_watchlist={
+            "BTC-USDT-SWAP": BreakoutWatchState(
+                first_breakout_time="2026-04-18T00:00:00+00:00",
+                last_breakout_time="2026-04-18T00:00:00+00:00",
+            )
+        },
+    )
+    monitor._now = lambda: datetime(2026, 4, 18, 0, 10, tzinfo=ZoneInfo("UTC"))  # type: ignore[method-assign]
+
+    monitor.check_five_minute_drops()
+    monitor.check_five_minute_drops()
+
+    assert notifier.drop_alerts == [[("BTC-USDT-SWAP", 100.0, 94.0)]]
+
+
+def test_five_minute_drop_ignores_current_intrabar_move_below_threshold(tmp_path) -> None:
+    config = make_config(tmp_path).model_copy(update={"five_minute_drop_enabled": True})
+    notifier = FakeNotifier(success=True)
+    exchange = FakeExchange(
+        klines={
+            "BTC-USDT-SWAP": [
+                Kline(
+                    open_time=datetime.fromisoformat("2026-04-18T00:00:00+00:00"),
+                    open_price=100.0,
+                    close_price=97.0,
+                ),
+                Kline(
+                    open_time=datetime.fromisoformat("2026-04-18T00:05:00+00:00"),
+                    open_price=97.0,
+                    close_price=94.09,
+                ),
+            ]
+        }
+    )
+    monitor = BreakoutMonitor(config, exchange, notifier, StateStore(config.state_path))
+    monitor.state = MonitorState(
+        date="2026-04-18",
+        breakout_watchlist={
+            "BTC-USDT-SWAP": BreakoutWatchState(
+                first_breakout_time="2026-04-18T00:00:00+00:00",
+                last_breakout_time="2026-04-18T00:00:00+00:00",
+            )
+        },
+    )
+    monitor._now = lambda: datetime(2026, 4, 18, 0, 10, tzinfo=ZoneInfo("UTC"))  # type: ignore[method-assign]
+
+    monitor.check_five_minute_drops()
+
+    assert notifier.drop_alerts == []
+
+
+def test_five_minute_drop_uses_configured_concurrency(tmp_path) -> None:
+    symbols = [f"TEST{index:02d}-USDT-SWAP" for index in range(30)]
+    kline = Kline(
+        open_time=datetime.fromisoformat("2026-04-18T00:00:00+00:00"),
+        open_price=100.0,
+        close_price=94.0,
+    )
+    config = make_config(tmp_path).model_copy(
+        update={
+            "five_minute_drop_enabled": True,
+            "five_minute_drop_max_workers": 20,
+        }
+    )
+    notifier = FakeNotifier(success=True)
+    exchange = FakeExchange(
+        klines={symbol: [kline] for symbol in symbols},
+        kline_delay_seconds=0.01,
+    )
+    monitor = BreakoutMonitor(config, exchange, notifier, StateStore(config.state_path))
+    monitor.state = MonitorState(
+        date="2026-04-18",
+        breakout_watchlist={
+            symbol: BreakoutWatchState(
+                first_breakout_time="2026-04-18T00:00:00+00:00",
+                last_breakout_time="2026-04-18T00:00:00+00:00",
+            )
+            for symbol in symbols
+        },
+    )
+    monitor._now = lambda: datetime(2026, 4, 18, 0, 1, tzinfo=ZoneInfo("UTC"))  # type: ignore[method-assign]
+
+    monitor.check_five_minute_drops()
+
+    assert len(exchange.latest_kline_calls) == 30
+    assert 1 < exchange.max_active_latest_kline_calls <= 20
+    assert len(notifier.drop_alerts) == 1
+    assert len(notifier.drop_alerts[0]) == 30
+
+
+def test_five_minute_drop_prunes_old_watchlist_symbols(tmp_path) -> None:
+    config = make_config(tmp_path).model_copy(update={"five_minute_drop_enabled": True})
+    notifier = FakeNotifier(success=True)
+    monitor = BreakoutMonitor(config, FakeExchange(), notifier, StateStore(config.state_path))
+    monitor.state = MonitorState(
+        date="2026-04-18",
+        breakout_watchlist={
+            "OLD-USDT-SWAP": BreakoutWatchState(
+                first_breakout_time="2026-04-01T00:00:00+00:00",
+                last_breakout_time="2026-04-10T00:00:00+00:00",
+            )
+        },
+    )
+    monitor._now = lambda: datetime(2026, 4, 18, 0, 1, tzinfo=ZoneInfo("UTC"))  # type: ignore[method-assign]
+
+    monitor.check_five_minute_drops()
+
+    assert monitor.state is not None
+    assert monitor.state.breakout_watchlist == {}
 
 
 def test_periodic_summary_sort_uses_percent_desc() -> None:

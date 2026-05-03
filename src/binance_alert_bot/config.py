@@ -17,6 +17,7 @@ class TelegramConfig(BaseModel):
     chat_id: str = ""
     new_breakout_chat_id: str = ""
     existing_breakout_chat_id: str = ""
+    five_minute_drop_chat_id: str = ""
 
     @model_validator(mode="after")
     def apply_environment(self) -> "TelegramConfig":
@@ -30,6 +31,10 @@ class TelegramConfig(BaseModel):
         self.existing_breakout_chat_id = os.getenv(
             "TELEGRAM_EXISTING_BREAKOUT_CHAT_ID",
             self.existing_breakout_chat_id,
+        ).strip()
+        self.five_minute_drop_chat_id = os.getenv(
+            "TELEGRAM_FIVE_MINUTE_DROP_CHAT_ID",
+            os.getenv("TELEGRAM_5M_DROP_CHAT_ID", self.five_minute_drop_chat_id),
         ).strip()
         return self
 
@@ -53,6 +58,10 @@ class TelegramConfig(BaseModel):
             return self.new_breakout_chat_id or self.chat_id
         return self.existing_breakout_chat_id or self.chat_id
 
+    def chat_id_for_five_minute_drop(self) -> str:
+        """返回 5 分钟急跌监控频道，未单独配置时回落到默认频道。"""
+        return self.five_minute_drop_chat_id or self.chat_id
+
 
 class AppConfig(BaseModel):
     """应用完整配置。"""
@@ -65,6 +74,12 @@ class AppConfig(BaseModel):
     ignored_symbols: list[str] = Field(default_factory=list)
     check_interval_minutes: int = Field(default=30, ge=1)
     breakout_summary_interval_hours: float = Field(default=0, ge=0, le=24)
+    five_minute_drop_enabled: bool = False
+    five_minute_drop_percent: float = Field(default=5.0, gt=0, le=100)
+    five_minute_drop_watch_days: int = Field(default=7, ge=1)
+    five_minute_drop_check_interval_seconds: int = Field(default=15, ge=5)
+    five_minute_drop_max_workers: int = Field(default=20, ge=1, le=100)
+    five_minute_drop_check_interval_minutes: int = Field(default=5, ge=1)
     threshold_days: int = Field(default=10, ge=1)
     threshold_refresh_time: time
     timezone: str = "UTC"
@@ -125,6 +140,11 @@ class AppConfig(BaseModel):
         if not self.monitor_all and not self.symbols:
             raise ValueError("symbols must not be empty when monitor_all is false")
         self.telegram.require_ready()
+        if self.five_minute_drop_enabled and not self.telegram.chat_id_for_five_minute_drop():
+            raise ValueError(
+                "Missing Telegram configuration: TELEGRAM_FIVE_MINUTE_DROP_CHAT_ID/"
+                "telegram.five_minute_drop_chat_id or TELEGRAM_CHAT_ID/telegram.chat_id"
+            )
         return self
 
     @property
