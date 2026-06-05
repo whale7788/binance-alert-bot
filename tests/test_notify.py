@@ -139,6 +139,9 @@ def test_telegram_notifier_adds_breakout_ordinal_for_all_breakout_lines(monkeypa
     assert "[第1个突破] BTC-USDT-SWAP" in calls[0]
     assert "[第2个突破] ETH-USDT-SWAP" in calls[0]
     assert "[第3个突破] AAVE-USDT-SWAP" in calls[0]
+    assert "[突破名单] 3个" in calls[0]
+    assert "新突破" in calls[0]
+    assert "今日已突破" in calls[0]
 
 
 def test_telegram_notifier_routes_breakout_statuses_to_split_chats(monkeypatch) -> None:
@@ -180,9 +183,13 @@ def test_telegram_notifier_routes_breakout_statuses_to_split_chats(monkeypatch) 
     )
 
     assert [payload["chat_id"] for payload in payloads] == ["new-chat", "existing-chat"]
-    assert "BTC-USDT-SWAP" in payloads[0]["text"]
+    assert payloads[0]["text"] == "BTC-USDT-SWAP  101 > 100  (+1.00%)"
+    assert "[突破名单]" not in payloads[0]["text"]
+    assert "新突破" not in payloads[0]["text"]
     assert "ETH-USDT-SWAP" not in payloads[0]["text"]
     assert "ETH-USDT-SWAP" in payloads[1]["text"]
+    assert "[突破名单] 1个" in payloads[1]["text"]
+    assert "今日已突破" in payloads[1]["text"]
     assert "BTC-USDT-SWAP" not in payloads[1]["text"]
 
 
@@ -217,8 +224,9 @@ def test_telegram_notifier_sends_five_minute_drop_alerts_to_drop_chat(monkeypatc
     )
 
     assert [payload["chat_id"] for payload in payloads] == ["drop-chat"]
-    assert "[5分钟急跌预警] 1个" in payloads[0]["text"]
-    assert "BTCUSDT  100 -> 94.5  (-5.50%)" in payloads[0]["text"]
+    assert payloads[0]["text"] == "BTCUSDT  100 -> 94.5  (-5.50%)"
+    assert "[5分钟急跌预警]" not in payloads[0]["text"]
+    assert "当前5m K线" not in payloads[0]["text"]
 
 
 def test_telegram_notifier_sends_continuous_breakout_alerts_to_continuous_chat(monkeypatch) -> None:

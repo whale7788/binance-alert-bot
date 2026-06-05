@@ -107,7 +107,10 @@ class TelegramNotifier:
         total_breakouts: int,
         sections: list[tuple[str, list[dict]]],
     ) -> list[str]:
-        """按 Telegram 长度限制拆分突破名单，必要时重复分块标题。"""
+        """按 Telegram 长度限制拆分突破名单，纯新突破只发送明细。"""
+        if len(sections) == 1 and sections[0][0] == "新突破":
+            return self._chunk_breakout_lines(sections[0][1])
+
         header = [f"[突破名单] {total_breakouts}个"]
         chunks: list[str] = []
         current_lines = header[:]
@@ -139,18 +142,39 @@ class TelegramNotifier:
         total_chunks = len(chunks)
         return [f"[{index}/{total_chunks}]\n{chunk}" for index, chunk in enumerate(chunks, start=1)]
 
-    def _chunk_five_minute_drop_alerts(self, alerts: list[dict]) -> list[str]:
-        """按 Telegram 长度限制拆分 5 分钟急跌提醒。"""
-        header = [f"[5分钟急跌预警] {len(alerts)}个", "当前5m K线"]
+    def _chunk_breakout_lines(self, items: list[dict]) -> list[str]:
+        """按 Telegram 长度限制拆分纯新突破明细。"""
         chunks: list[str] = []
-        current_lines = header[:]
+        current_lines: list[str] = []
+
+        for item in items:
+            line = self._format_breakout_line(item)
+            candidate = "\n".join(current_lines + [line]).strip()
+            if len(candidate) > self.BREAKOUT_SUMMARY_MAX_CHARS and current_lines:
+                chunks.append("\n".join(current_lines).strip())
+                current_lines = [line]
+            else:
+                current_lines.append(line)
+
+        final_text = "\n".join(current_lines).strip()
+        if not chunks:
+            return [final_text]
+
+        chunks.append(final_text)
+        total_chunks = len(chunks)
+        return [f"[{index}/{total_chunks}]\n{chunk}" for index, chunk in enumerate(chunks, start=1)]
+
+    def _chunk_five_minute_drop_alerts(self, alerts: list[dict]) -> list[str]:
+        """按 Telegram 长度限制拆分 5 分钟急跌明细。"""
+        chunks: list[str] = []
+        current_lines: list[str] = []
 
         for item in alerts:
             line = self._format_five_minute_drop_line(item)
             candidate = "\n".join(current_lines + [line]).strip()
-            if len(candidate) > self.FIVE_MINUTE_DROP_MAX_CHARS and len(current_lines) > len(header):
+            if len(candidate) > self.FIVE_MINUTE_DROP_MAX_CHARS and current_lines:
                 chunks.append("\n".join(current_lines).strip())
-                current_lines = header + [line]
+                current_lines = [line]
             else:
                 current_lines.append(line)
 
