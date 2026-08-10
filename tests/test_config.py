@@ -19,7 +19,8 @@ def test_example_config_loads_with_telegram_environment(monkeypatch, tmp_path) -
 
     config = load_config(config_path)
 
-    assert config.exchange == "okx"
+    assert config.exchange == "binance"
+    assert config.exchange_proxy_url == "socks5://localhost:10808"
     assert config.monitor_all is False
     assert config.symbols == ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]
     assert config.ignored_symbols == ["INTC-USDT-SWAP", "SNDK-USDT-SWAP", "CRWV-USDT-SWAP"]
@@ -38,6 +39,11 @@ def test_example_config_loads_with_telegram_environment(monkeypatch, tmp_path) -
     assert config.five_minute_drop_check_interval_seconds == 15
     assert config.five_minute_drop_max_workers == 20
     assert config.five_minute_drop_check_interval_minutes == 5
+    assert config.breakout_chart_enabled is True
+    assert config.breakout_chart_interval == "4h"
+    assert config.breakout_chart_candles == 40
+    assert config.breakout_chart_include_incomplete is True
+    assert config.breakout_chart_max_workers == 6
 
 
 def test_split_breakout_chat_ids_can_replace_default_chat_id(monkeypatch, tmp_path) -> None:

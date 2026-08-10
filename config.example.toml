@@ -1,5 +1,7 @@
-exchange = "okx"
-# Set to "binance" to use Binance U-margined perpetual futures.
+exchange = "binance"
+# Binance proxy entry on this machine. Leave empty for direct access.
+exchange_proxy_url = "socks5://localhost:10808"
+# Set to "okx" to use OKX perpetual swaps instead.
 monitor_all = false
 symbols = ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]
 ignored_symbols = ["INTC-USDT-SWAP", "SNDK-USDT-SWAP", "CRWV-USDT-SWAP"]
@@ -14,6 +16,11 @@ five_minute_drop_percent = 5
 five_minute_drop_watch_days = 7
 five_minute_drop_check_interval_seconds = 15
 five_minute_drop_max_workers = 20
+breakout_chart_enabled = true
+breakout_chart_interval = "4h"
+breakout_chart_candles = 40
+breakout_chart_include_incomplete = true
+breakout_chart_max_workers = 6
 threshold_days = 10
 threshold_refresh_time = "00:05"
 timezone = "UTC"

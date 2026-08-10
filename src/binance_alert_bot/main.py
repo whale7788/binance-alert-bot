@@ -61,7 +61,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     setup_logging(config.log_file, config.log_level)
-    exchange = OkxClient() if config.exchange == "okx" else BinanceFuturesClient()
+    exchange_kwargs = {"proxy_url": config.exchange_proxy_url or None}
+    exchange = OkxClient(**exchange_kwargs) if config.exchange == "okx" else BinanceFuturesClient(**exchange_kwargs)
     exchange_label = "OKX" if config.exchange == "okx" else "Binance futures"
     logging.getLogger(__name__).info("Starting alert bot with %s market data", exchange_label)
     logging.getLogger(__name__).info(

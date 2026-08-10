@@ -15,11 +15,13 @@ LOGGER = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class Kline:
-    """一根 K 线的核心价格；未收线时 close_price 表示最新价格。"""
+    """一根 K 线的 OHLC 价格；未收线时 close_price 表示最新价格。"""
 
     open_time: datetime
     open_price: float
     close_price: float
+    high_price: float | None = None
+    low_price: float | None = None
 
 
 class ExchangeClient(Protocol):
@@ -29,7 +31,13 @@ class ExchangeClient(Protocol):
     def get_daily_highs(self, symbol: str, limit: int = 15) -> list[float]: ...
     def get_current_price(self, symbol: str) -> float: ...
     def get_current_prices(self, symbols: Iterable[str]) -> dict[str, float]: ...
-    def get_recent_klines(self, symbol: str, interval: str, limit: int = 2) -> list[Kline]: ...
+    def get_recent_klines(
+        self,
+        symbol: str,
+        interval: str,
+        limit: int = 2,
+        include_incomplete: bool = False,
+    ) -> list[Kline]: ...
     def get_latest_kline(self, symbol: str, interval: str) -> Kline: ...
 
 
@@ -44,9 +52,13 @@ class OkxClient:
         timeout: float = 20.0,
         max_retries: int = 3,
         retry_delay_seconds: float = 1.0,
+        proxy_url: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.client = httpx.Client(base_url=self.base_url, timeout=timeout)
+        client_kwargs = {"base_url": self.base_url, "timeout": timeout}
+        if proxy_url:
+            client_kwargs["proxy"] = proxy_url.strip()
+        self.client = httpx.Client(**client_kwargs)
         self.max_retries = max_retries
         self.retry_delay_seconds = retry_delay_seconds
 
@@ -101,20 +113,35 @@ class OkxClient:
                 prices[symbol] = float(item["last"])
         return prices
 
-    def get_recent_klines(self, symbol: str, interval: str, limit: int = 2) -> list[Kline]:
+    def get_recent_klines(
+        self,
+        symbol: str,
+        interval: str,
+        limit: int = 2,
+        include_incomplete: bool = False,
+    ) -> list[Kline]:
+        bar = "4H" if interval.lower() == "4h" else interval
+        path = "/api/v5/market/candles" if include_incomplete else "/api/v5/market/history-candles"
+        request_limit = limit if include_incomplete else limit + 1
         payload = self._get_json(
-            "/api/v5/market/history-candles",
-            params={"instId": self._normalize_symbol(symbol), "bar": interval, "limit": str(limit + 1)},
+            path,
+            params={"instId": self._normalize_symbol(symbol), "bar": bar, "limit": str(request_limit)},
         )
         candles = payload.get("data", [])
-        completed_candles = [candle for candle in candles if self._is_okx_candle_closed(candle)][:limit]
+        selected_candles = (
+            candles[:limit]
+            if include_incomplete
+            else [candle for candle in candles if self._is_okx_candle_closed(candle)][:limit]
+        )
         klines = [
             Kline(
                 open_time=datetime.fromtimestamp(int(candle[0]) / 1000, tz=timezone.utc),
                 open_price=float(candle[1]),
                 close_price=float(candle[4]),
+                high_price=float(candle[2]),
+                low_price=float(candle[3]),
             )
-            for candle in completed_candles
+            for candle in selected_candles
         ]
         return sorted(klines, key=lambda kline: kline.open_time)
 
@@ -131,6 +158,8 @@ class OkxClient:
             open_time=datetime.fromtimestamp(int(candle[0]) / 1000, tz=timezone.utc),
             open_price=float(candle[1]),
             close_price=float(candle[4]),
+            high_price=float(candle[2]),
+            low_price=float(candle[3]),
         )
 
     def _get_json(self, path: str, params: dict[str, str]) -> dict:
@@ -203,9 +232,13 @@ class BinanceFuturesClient:
         timeout: float = 20.0,
         max_retries: int = 3,
         retry_delay_seconds: float = 1.0,
+        proxy_url: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.client = httpx.Client(base_url=self.base_url, timeout=timeout)
+        client_kwargs = {"base_url": self.base_url, "timeout": timeout}
+        if proxy_url:
+            client_kwargs["proxy"] = proxy_url.strip()
+        self.client = httpx.Client(**client_kwargs)
         self.max_retries = max_retries
         self.retry_delay_seconds = retry_delay_seconds
 
@@ -267,21 +300,36 @@ class BinanceFuturesClient:
                 prices[symbol] = float(item["price"])
         return prices
 
-    def get_recent_klines(self, symbol: str, interval: str, limit: int = 2) -> list[Kline]:
+    def get_recent_klines(
+        self,
+        symbol: str,
+        interval: str,
+        limit: int = 2,
+        include_incomplete: bool = False,
+    ) -> list[Kline]:
+        request_limit = limit if include_incomplete else limit + 1
         payload = self._get_json(
             "/fapi/v1/klines",
-            params={"symbol": self._normalize_symbol(symbol), "interval": interval, "limit": str(limit + 1)},
+            params={
+                "symbol": self._normalize_symbol(symbol),
+                "interval": interval,
+                "limit": str(request_limit),
+            },
         )
-        completed_candles = [candle for candle in payload if self._is_binance_kline_closed(candle)]
-        if len(completed_candles) > limit:
-            completed_candles = completed_candles[-limit:]
+        selected_candles = (
+            payload[-limit:]
+            if include_incomplete
+            else [candle for candle in payload if self._is_binance_kline_closed(candle)][-limit:]
+        )
         return [
             Kline(
                 open_time=datetime.fromtimestamp(int(candle[0]) / 1000, tz=timezone.utc),
                 open_price=float(candle[1]),
                 close_price=float(candle[4]),
+                high_price=float(candle[2]),
+                low_price=float(candle[3]),
             )
-            for candle in completed_candles
+            for candle in selected_candles
         ]
 
     def get_latest_kline(self, symbol: str, interval: str) -> Kline:
@@ -296,6 +344,8 @@ class BinanceFuturesClient:
             open_time=datetime.fromtimestamp(int(candle[0]) / 1000, tz=timezone.utc),
             open_price=float(candle[1]),
             close_price=float(candle[4]),
+            high_price=float(candle[2]),
+            low_price=float(candle[3]),
         )
 
     def _get_json(self, path: str, params: dict[str, str]) -> dict | list:

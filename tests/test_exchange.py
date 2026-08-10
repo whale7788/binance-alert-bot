@@ -108,6 +108,51 @@ def test_binance_get_recent_klines_returns_completed_klines(monkeypatch) -> None
     assert [(kline.open_price, kline.close_price) for kline in klines] == [(100.0, 96.0), (96.0, 90.0)]
 
 
+def test_binance_get_recent_klines_can_include_current_unfinished_kline(monkeypatch) -> None:
+    client = BinanceFuturesClient()
+    monkeypatch.setattr("binance_alert_bot.exchange.datetime", _FakeDateTime)
+    payload = [
+        [1714434600000, "100.0", "105.0", "95.0", "102.0", "0", 1714434899999, "0", "0", "0", "0", "0"],
+        [1714434900000, "102.0", "110.0", "101.0", "108.0", "0", 1714435199999, "0", "0", "0", "0", "0"],
+    ]
+    captured: dict[str, dict[str, str]] = {}
+
+    def fake_get_json(path, params):
+        captured["call"] = {"path": path, **params}
+        return payload
+
+    client._get_json = fake_get_json  # type: ignore[method-assign]
+
+    klines = client.get_recent_klines(
+        "BTC-USDT-SWAP",
+        interval="4h",
+        limit=2,
+        include_incomplete=True,
+    )
+
+    assert captured["call"]["path"] == "/fapi/v1/klines"
+    assert captured["call"]["interval"] == "4h"
+    assert captured["call"]["limit"] == "2"
+    assert len(klines) == 2
+    assert (klines[-1].high_price, klines[-1].low_price) == (110.0, 101.0)
+    assert klines[-1].close_price == 108.0
+
+
+def test_binance_client_passes_explicit_proxy_to_httpx(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_client(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr("binance_alert_bot.exchange.httpx.Client", fake_client)
+
+    BinanceFuturesClient(proxy_url="socks5://localhost:10808")
+
+    assert captured["base_url"] == "https://fapi.binance.com"
+    assert captured["proxy"] == "socks5://localhost:10808"
+
+
 def test_binance_get_latest_kline_keeps_unfinished_current_kline() -> None:
     client = BinanceFuturesClient()
     payload = [

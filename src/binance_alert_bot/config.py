@@ -78,6 +78,7 @@ class AppConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     exchange: str = "okx"
+    exchange_proxy_url: str = ""
     monitor_all: bool = False
     symbols: list[str] = Field(default_factory=list)
     ignored_symbols: list[str] = Field(default_factory=list)
@@ -91,6 +92,11 @@ class AppConfig(BaseModel):
     five_minute_drop_check_interval_seconds: int = Field(default=15, ge=5)
     five_minute_drop_max_workers: int = Field(default=20, ge=1, le=100)
     five_minute_drop_check_interval_minutes: int = Field(default=5, ge=1)
+    breakout_chart_enabled: bool = True
+    breakout_chart_interval: str = "4h"
+    breakout_chart_candles: int = Field(default=40, ge=1, le=1500)
+    breakout_chart_include_incomplete: bool = True
+    breakout_chart_max_workers: int = Field(default=6, ge=1, le=100)
     threshold_days: int = Field(default=10, ge=1)
     threshold_refresh_time: time
     timezone: str = "UTC"
@@ -145,9 +151,18 @@ class AppConfig(BaseModel):
             raise ValueError(f"exchange must be one of {sorted(valid)}")
         return exchange
 
+    @field_validator("breakout_chart_interval")
+    @classmethod
+    def normalize_breakout_chart_interval(cls, value: str) -> str:
+        interval = value.strip().lower()
+        if not interval:
+            raise ValueError("breakout_chart_interval must not be empty")
+        return interval
+
     @model_validator(mode="after")
     def validate_monitor_scope(self) -> "AppConfig":
         """monitor_all 为 false 时必须提供 symbols。"""
+        self.exchange_proxy_url = os.getenv("EXCHANGE_PROXY_URL", self.exchange_proxy_url).strip()
         if not self.monitor_all and not self.symbols:
             raise ValueError("symbols must not be empty when monitor_all is false")
         self.telegram.require_ready()

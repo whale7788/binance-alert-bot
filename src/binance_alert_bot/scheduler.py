@@ -10,6 +10,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+from .chart import render_breakout_chart
 from .config import AppConfig
 from .exchange import ExchangeClient
 from .notify import TelegramNotifier
@@ -168,7 +169,7 @@ class BreakoutMonitor:
         self._save_state("threshold refresh")
 
     def check_prices(self) -> None:
-        """检查是否有新的突破，并在有新突破时推送完整名单。"""
+        """检查新的突破，并按配置发送文字或逐币图表通知。"""
         now = self._now()
         self._ensure_current_thresholds(now, context="price check")
         state = self._state()
@@ -248,12 +249,33 @@ class BreakoutMonitor:
             start=todays_breakout_count + 1,
         )
 
+        if self.config.breakout_chart_enabled:
+            chart_items = self._prepare_breakout_chart_items(notification_breakouts)
+            try:
+                photo_results = self.notifier.send_breakout_photos(chart_items, now)
+            except Exception:
+                LOGGER.exception("Breakout photo notification failed unexpectedly")
+                photo_results = {}
+
+            sent_count = sum(1 for sent in photo_results.values() if sent)
+            failed_count = len(new_breakouts) - sent_count
+            LOGGER.info(
+                "Breakout photo notification complete: requested=%d sent=%d failed=%d",
+                len(new_breakouts),
+                sent_count,
+                failed_count,
+            )
+            self._send_continuous_breakout_alerts(continuous_breakouts, now)
+            for item in new_breakouts:
+                symbol = str(item["symbol"])
+                state.mark_notified(symbol, now)
+                state.record_breakout_watch(symbol, now)
+            self._save_state(f"breakout photos for {len(new_breakouts)} symbols")
+            LOGGER.info("Breakout photo attempt completed and state updated for %d new symbols", len(new_breakouts))
+            return
+
         if self.notifier.send_breakout_summary(notification_breakouts, now):
-            if continuous_breakouts:
-                if self.notifier.send_continuous_breakout_alerts(continuous_breakouts, now):
-                    LOGGER.info("Continuous breakout alerts sent for %d symbols", len(continuous_breakouts))
-                else:
-                    LOGGER.error("Continuous breakout alert notification failed")
+            self._send_continuous_breakout_alerts(continuous_breakouts, now)
             for item in new_breakouts:
                 symbol = str(item["symbol"])
                 state.mark_notified(symbol, now)
@@ -262,6 +284,85 @@ class BreakoutMonitor:
             LOGGER.info("Breakout summary sent and state updated for %d new symbols", len(new_breakouts))
         else:
             LOGGER.error("Breakout summary notification failed; state not marked as notified")
+
+    def _prepare_breakout_chart_items(
+        self,
+        breakouts: list[dict[str, float | str | int]],
+    ) -> list[dict]:
+        """并发获取新突破图表数据并按原通知顺序返回图片载荷。"""
+        if not breakouts:
+            return []
+
+        max_workers = min(self.config.breakout_chart_max_workers, len(breakouts))
+        breakouts_by_symbol = {str(item["symbol"]): item for item in breakouts}
+        prepared_by_symbol: dict[str, dict] = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(self._build_breakout_chart_item, item): str(item["symbol"])
+                for item in breakouts
+            }
+            for future in as_completed(futures):
+                symbol = futures[future]
+                try:
+                    prepared_by_symbol[symbol] = future.result()
+                except Exception:
+                    LOGGER.exception("Failed to prepare breakout chart for %s", symbol)
+                    prepared_by_symbol[symbol] = {
+                        **breakouts_by_symbol[symbol],
+                        "chart_requested_candles": self.config.breakout_chart_candles,
+                        "chart_kline_count": 0,
+                    }
+        return [prepared_by_symbol[str(item["symbol"])] for item in breakouts]
+
+    def _build_breakout_chart_item(self, item: dict[str, float | str | int]) -> dict:
+        """为一个新突破币种获取 K 线并生成 PNG。"""
+        symbol = str(item["symbol"])
+        prepared = {
+            **item,
+            "chart_requested_candles": self.config.breakout_chart_candles,
+            "chart_kline_count": 0,
+        }
+        try:
+            klines = self.exchange.get_recent_klines(
+                symbol,
+                interval=self.config.breakout_chart_interval,
+                limit=self.config.breakout_chart_candles,
+                include_incomplete=self.config.breakout_chart_include_incomplete,
+            )
+            if not klines:
+                raise ValueError(f"No {self.config.breakout_chart_interval} klines returned")
+
+            prepared["chart_image"] = render_breakout_chart(
+                symbol=symbol,
+                klines=klines,
+                threshold=float(item["threshold"]),
+                breakout_price=float(item["current_price"]),
+                breakout_time=self._parse_state_time(
+                    str(item.get("breakout_time", "")),
+                    fallback=self._now(),
+                ),
+                requested_candles=self.config.breakout_chart_candles,
+            )
+            prepared["chart_kline_count"] = len(klines)
+            LOGGER.info(
+                "Breakout chart prepared: symbol=%s candles=%d/%d include_incomplete=%s",
+                symbol,
+                len(klines),
+                self.config.breakout_chart_candles,
+                self.config.breakout_chart_include_incomplete,
+            )
+        except Exception:
+            LOGGER.exception("Failed to build breakout chart for %s", symbol)
+        return prepared
+
+    def _send_continuous_breakout_alerts(self, alerts: list[dict], now: datetime) -> None:
+        """发送连续突破提醒，不让其发送结果改变新突破状态。"""
+        if not alerts:
+            return
+        if self.notifier.send_continuous_breakout_alerts(alerts, now):
+            LOGGER.info("Continuous breakout alerts sent for %d symbols", len(alerts))
+        else:
+            LOGGER.error("Continuous breakout alert notification failed")
 
     def check_five_minute_drops(self) -> None:
         """监控突破池里币种的当前 5m K 线盘中急跌。"""

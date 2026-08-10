@@ -335,3 +335,47 @@ def test_telegram_notifier_splits_large_breakout_summary(monkeypatch) -> None:
     assert calls[0].startswith("[1/")
     assert all("[突破名单] 4个" in call for call in calls)
     assert all("今日已突破" in call for call in calls)
+
+
+def test_telegram_notifier_sends_one_breakout_photo_with_caption(monkeypatch) -> None:
+    payloads: list[dict] = []
+
+    def fake_post(*args, **kwargs):
+        payloads.append(kwargs)
+        return make_response(200, json={"ok": True})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    notifier = TelegramNotifier(
+        TelegramConfig(
+            bot_token="token",
+            chat_id="fallback-chat",
+            new_breakout_chat_id="new-chat",
+        )
+    )
+
+    results = notifier.send_breakout_photos(
+        [
+            {
+                "symbol": "BTCUSDT",
+                "current_price": 101.0,
+                "threshold": 100.0,
+                "status": "新突破",
+                "breakout_time": "2026-04-11T08:30:00+00:00",
+                "breakout_ordinal": 1,
+                "chart_image": b"png-bytes",
+                "chart_kline_count": 40,
+                "chart_requested_candles": 40,
+            }
+        ],
+        datetime(2026, 4, 11, 8, 30),
+    )
+
+    assert results == {"BTCUSDT": True}
+    assert len(payloads) == 1
+    assert payloads[0]["data"]["chat_id"] == "new-chat"
+    assert "BTCUSDT" in payloads[0]["data"]["caption"]
+    assert "4H K线：40/40（含未收线）" in payloads[0]["data"]["caption"]
+    photo = payloads[0]["files"]["photo"]
+    assert photo[0] == "BTCUSDT_4h_breakout.png"
+    assert photo[1] == b"png-bytes"
+    assert photo[2] == "image/png"

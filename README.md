@@ -1,6 +1,6 @@
 # Binance Alert Bot
 
-一个本地运行的 Python 监控程序，用于检查 OKX USDT 永续合约白名单币种是否突破当日固定的近 10 根已完成日 K 高点，并通过 Telegram 发送提醒。
+一个本地运行的 Python 监控程序，用于检查 OKX 或 Binance USDT 永续合约白名单币种是否突破当日固定的近 10 根已完成日 K 高点，并通过 Telegram 发送提醒。
 
 ## 功能
 
@@ -8,6 +8,7 @@
 - 按固定周期检查最新成交价是否 `> threshold`
 - 同一币种同一天最多通知一次
 - 可把最近 7 天内再次突破的币额外推送到“连续突破”频道
+- Binance 新突破可逐币发送一张包含 40 根 4H K 线（含当前未收线 K 线）的 PNG 图和说明
 - 已突破币种会进入 7 天急跌监控池，可单独监控当前 5 分钟 K 线盘中跌幅
 - 状态持久化到本地 JSON，程序重启后不会丢失当日已通知状态
 - 日志同时输出到控制台和文件
@@ -31,6 +32,8 @@ Copy-Item config.example.toml config.toml
 编辑 `config.toml`：
 
 ```toml
+exchange = "binance"
+exchange_proxy_url = "socks5://localhost:10808"
 monitor_all = false
 symbols = ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]
 ignored_symbols = ["INTC-USDT-SWAP", "SNDK-USDT-SWAP", "CRWV-USDT-SWAP"]
@@ -43,6 +46,11 @@ five_minute_drop_percent = 5
 five_minute_drop_watch_days = 7
 five_minute_drop_check_interval_seconds = 15
 five_minute_drop_max_workers = 20
+breakout_chart_enabled = true
+breakout_chart_interval = "4h"
+breakout_chart_candles = 40
+breakout_chart_include_incomplete = true
+breakout_chart_max_workers = 6
 threshold_days = 10
 threshold_refresh_time = "00:05"
 timezone = "UTC"
@@ -50,7 +58,11 @@ timezone = "UTC"
 
 `breakout_summary_interval_hours` 支持小数，例如 `0.5` 表示每半小时推送一次“今日已突破”概览。
 
-`continuous_breakout_enabled = true` 后，原来的“新突破”照常发送；如果某币最近 `continuous_breakout_watch_days` 天内已经突破过，并且不是同一个 UTC 交易日，本次再次突破会额外推送到“连续突破”频道。
+`exchange = "binance"` 时，程序会使用 Binance U 本位永续合约接口。`exchange_proxy_url` 是交易所行情请求使用的代理入口；本机配置使用 `socks5://localhost:10808`，代理上游节点不直接写进程序。
+
+`breakout_chart_enabled = true` 后，每次真正的新突破会向“新突破”频道逐币发送一张 PNG 图和 caption。图中包含最近 `breakout_chart_candles` 根 `breakout_chart_interval` K 线；`breakout_chart_include_incomplete = true` 时会保留当前未收线 K 线。周期性的“今日已突破”、连续突破和 5 分钟急跌仍按原有文字通知发送。图片获取或上传失败会记录日志，但不会自动重试，也不会回退发送纯文字新突破消息。
+
+`continuous_breakout_enabled = true` 后，原有新突破通知照常发送；如果某币最近 `continuous_breakout_watch_days` 天内已经突破过，并且不是同一个 UTC 交易日，本次再次突破会额外推送到“连续突破”频道。
 
 `five_minute_drop_enabled = true` 后，程序会把已突破币种放入急跌监控池；如果启动时状态文件里已经有“今日已突破”的币，也会自动补进监控池。某币最近 `five_minute_drop_watch_days` 天内没有再次突破，就会移出。急跌预警不等收线，按 `five_minute_drop_check_interval_seconds` 秒级轮询当前 5 分钟 K 线，并用 `five_minute_drop_max_workers` 并发行情请求。例如 `five_minute_drop_percent = 5` 表示当前 5m K 线的开盘价到实时价 `<= -5%` 就提醒。同一根 5m K 线只提醒一次。
 

@@ -1,6 +1,6 @@
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -19,15 +19,18 @@ class FakeExchange:
         failing_price_symbol: str | None = None,
         daily_highs: dict[str, list[float]] | None = None,
         klines: dict[str, list[Kline]] | None = None,
+        recent_klines: dict[str, list[Kline]] | None = None,
         kline_delay_seconds: float = 0,
     ) -> None:
         self.prices = prices or {}
         self.failing_price_symbol = failing_price_symbol
         self.daily_highs = daily_highs or {}
         self.klines = klines or {}
+        self.recent_klines = recent_klines or {}
         self.kline_delay_seconds = kline_delay_seconds
         self.daily_high_calls = 0
         self.kline_calls: list[tuple[str, str, int]] = []
+        self.recent_kline_include_incomplete_calls: list[bool] = []
         self.latest_kline_calls: list[tuple[str, str]] = []
         self.latest_kline_lock = threading.Lock()
         self.active_latest_kline_calls = 0
@@ -63,8 +66,29 @@ class FakeExchange:
             prices[symbol] = self.prices[symbol]
         return prices
 
-    def get_recent_klines(self, symbol: str, interval: str, limit: int = 2) -> list[Kline]:
+    def get_recent_klines(
+        self,
+        symbol: str,
+        interval: str,
+        limit: int = 2,
+        include_incomplete: bool = False,
+    ) -> list[Kline]:
         self.kline_calls.append((symbol, interval, limit))
+        self.recent_kline_include_incomplete_calls.append(include_incomplete)
+        if symbol in self.recent_klines:
+            return self.recent_klines[symbol][-limit:]
+        if interval == "4h":
+            start = datetime(2026, 1, 1, tzinfo=ZoneInfo("UTC"))
+            return [
+                Kline(
+                    open_time=start + timedelta(hours=4 * index),
+                    open_price=100.0 + index,
+                    close_price=100.5 + index,
+                    high_price=101.0 + index,
+                    low_price=99.0 + index,
+                )
+                for index in range(limit)
+            ]
         return self.klines.get(symbol, [])[-limit:]
 
     def get_latest_kline(self, symbol: str, interval: str) -> Kline:
@@ -89,6 +113,7 @@ class FakeNotifier:
         self.success = success
         self.sent: list[list[tuple[str, str]]] = []
         self.sent_with_ordinals: list[list[tuple[str, str, int | None]]] = []
+        self.photos: list[list[tuple[str, int, int]]] = []
         self.drop_alerts: list[list[tuple[str, float, float]]] = []
         self.continuous_alerts: list[list[tuple[str, str]]] = []
 
@@ -98,6 +123,23 @@ class FakeNotifier:
             [(item["symbol"], item["status"], item.get("breakout_ordinal")) for item in breakouts]
         )
         return self.success
+
+    def send_breakout_photos(self, breakouts, breakout_time) -> dict[str, bool]:
+        self.sent.append([(item["symbol"], item["status"]) for item in breakouts])
+        self.sent_with_ordinals.append(
+            [(item["symbol"], item["status"], item.get("breakout_ordinal")) for item in breakouts]
+        )
+        self.photos.append(
+            [
+                (
+                    item["symbol"],
+                    len(item.get("chart_image", b"")),
+                    int(item.get("chart_kline_count", 0)),
+                )
+                for item in breakouts
+            ]
+        )
+        return {str(item["symbol"]): self.success for item in breakouts}
 
     def send_five_minute_drop_alerts(self, alerts, alert_time) -> bool:
         self.drop_alerts.append([(item["symbol"], item["open_price"], item["close_price"]) for item in alerts])
@@ -156,7 +198,24 @@ def test_breakout_sends_once_per_day(tmp_path) -> None:
     assert "BTC-USDT-SWAP" in monitor.state.breakout_watchlist
 
 
-def test_notification_failure_does_not_mark_notified(tmp_path) -> None:
+def test_new_breakout_sends_one_4h_chart_including_current_kline(tmp_path) -> None:
+    config = make_config(tmp_path)
+    notifier = FakeNotifier(success=True)
+    exchange = FakeExchange(prices={"BTC-USDT-SWAP": 16.0})
+    monitor = BreakoutMonitor(config, exchange, notifier, StateStore(config.state_path))
+    monitor.initialize()
+
+    monitor.check_prices()
+
+    assert exchange.kline_calls == [("BTC-USDT-SWAP", "4h", 40)]
+    assert exchange.recent_kline_include_incomplete_calls == [True]
+    assert len(notifier.photos) == 1
+    assert notifier.photos[0][0][0] == "BTC-USDT-SWAP"
+    assert notifier.photos[0][0][1] > 0
+    assert notifier.photos[0][0][2] == 40
+
+
+def test_photo_notification_failure_is_recorded_but_marks_notified(tmp_path) -> None:
     config = make_config(tmp_path)
     notifier = FakeNotifier(success=False)
     monitor = BreakoutMonitor(
@@ -169,9 +228,12 @@ def test_notification_failure_does_not_mark_notified(tmp_path) -> None:
 
     monitor.check_prices()
 
-    assert notifier.sent == [[("BTC-USDT-SWAP", "新突破")]]
+    assert len(notifier.photos) == 1
+    assert notifier.photos[0][0][0] == "BTC-USDT-SWAP"
+    assert notifier.photos[0][0][1] > 0
+    assert notifier.photos[0][0][2] == 40
     assert monitor.state is not None
-    assert monitor.state.symbols["BTC-USDT-SWAP"].notified is False
+    assert monitor.state.symbols["BTC-USDT-SWAP"].notified is True
 
 
 def test_one_symbol_price_failure_does_not_stop_other_symbols(tmp_path) -> None:
@@ -389,6 +451,7 @@ def test_periodic_summary_sends_todays_breakouts_without_new_breakouts(tmp_path)
         [("BTC-USDT-SWAP", "新突破")],
         [("BTC-USDT-SWAP", "今日已突破")],
     ]
+    assert len(notifier.photos) == 1
 
 
 def test_start_schedules_half_hour_periodic_summary(tmp_path) -> None:

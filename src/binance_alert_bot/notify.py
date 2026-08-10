@@ -16,6 +16,7 @@ class TelegramNotifier:
     """负责把突破提醒发送到 Telegram。"""
 
     BREAKOUT_SUMMARY_MAX_CHARS = 3500
+    BREAKOUT_PHOTO_CAPTION_MAX_CHARS = 1024
     FIVE_MINUTE_DROP_MAX_CHARS = 3500
     CONTINUOUS_BREAKOUT_MAX_CHARS = 3500
 
@@ -55,6 +56,34 @@ class TelegramNotifier:
                 ok = self._send_text(chunk, context, chat_id=chat_id) and ok
         return ok
 
+    def send_breakout_photos(self, breakouts: list[dict], breakout_time: datetime) -> dict[str, bool]:
+        """逐币发送新突破图表，并返回每个币种的上传结果。"""
+        if not breakouts:
+            return {}
+
+        chat_id = self.config.chat_id_for_breakout_status("新突破")
+        results: dict[str, bool] = {}
+        for item in breakouts:
+            symbol = str(item.get("symbol", ""))
+            image = item.get("chart_image")
+            if not symbol:
+                LOGGER.error("Cannot send breakout photo without a symbol")
+                continue
+            if not isinstance(image, (bytes, bytearray)):
+                LOGGER.error("Breakout chart image is missing for %s", symbol)
+                results[symbol] = False
+                continue
+
+            caption = self._format_breakout_photo_caption(item, breakout_time)
+            results[symbol] = self._send_photo(
+                bytes(image),
+                caption,
+                context=f"new breakout photo {symbol}",
+                chat_id=chat_id,
+                filename=f"{symbol.replace('-', '_')}_4h_breakout.png",
+            )
+        return results
+
     def send_five_minute_drop_alerts(self, alerts: list[dict], alert_time: datetime) -> bool:
         """发送 5 分钟盘中急跌预警。"""
         if not alerts:
@@ -86,6 +115,23 @@ class TelegramNotifier:
         ordinal = item.get("breakout_ordinal")
         prefix = "" if ordinal is None else f"[第{int(ordinal)}个突破] "
         return f"{prefix}{item['symbol']}  {item['current_price']:g} > {item['threshold']:g}  ({percent:+.2f}%)"
+
+    def _format_breakout_photo_caption(self, item: dict, breakout_time: datetime) -> str:
+        _, percent = breakout_delta(item["current_price"], item["threshold"])
+        event_time = str(item.get("breakout_time", breakout_time.isoformat())).replace("T", " ")[:19]
+        ordinal = item.get("breakout_ordinal")
+        ordinal_text = "" if ordinal is None else f"[第{int(ordinal)}个突破] "
+        candle_count = int(item.get("chart_kline_count", 0))
+        requested_count = int(item.get("chart_requested_candles", 40))
+        caption = (
+            f"{ordinal_text}[新突破] {item['symbol']}\n"
+            f"当前价：{item['current_price']:g}\n"
+            f"阈值：{item['threshold']:g}\n"
+            f"突破幅度：{percent:+.2f}%\n"
+            f"检测时间：{event_time} UTC\n"
+            f"4H K线：{candle_count}/{requested_count}（含未收线）"
+        )
+        return caption[: self.BREAKOUT_PHOTO_CAPTION_MAX_CHARS]
 
     def _format_five_minute_drop_line(self, item: dict) -> str:
         percent = candle_change_percent(item["open_price"], item["close_price"])
@@ -242,4 +288,47 @@ class TelegramNotifier:
             return False
         except Exception:
             LOGGER.exception("Failed to send Telegram alert for %s", context)
+            return False
+
+    def _send_photo(
+        self,
+        image: bytes,
+        caption: str,
+        context: str,
+        chat_id: str,
+        filename: str,
+    ) -> bool:
+        """上传一张 Telegram 图片。"""
+        if not chat_id:
+            LOGGER.error("Telegram chat_id is missing for %s", context)
+            return False
+
+        url = f"https://api.telegram.org/bot{self.config.bot_token}/sendPhoto"
+        try:
+            response = httpx.post(
+                url,
+                data={"chat_id": chat_id, "caption": caption},
+                files={"photo": (filename, image, "image/png")},
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            ok = bool(payload.get("ok", False))
+            if not ok:
+                LOGGER.error("Telegram returned non-ok response for %s: %s", context, payload)
+            else:
+                LOGGER.info("Telegram breakout photo sent for %s bytes=%d", context, len(image))
+            return ok
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text[:500]
+            LOGGER.error(
+                "Telegram photo request failed for %s status=%d body=%s",
+                context,
+                exc.response.status_code,
+                body,
+            )
+            LOGGER.exception("Failed to send Telegram breakout photo for %s", context)
+            return False
+        except Exception:
+            LOGGER.exception("Failed to send Telegram breakout photo for %s", context)
             return False
