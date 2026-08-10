@@ -122,7 +122,7 @@ class TelegramNotifier:
         ordinal = item.get("breakout_ordinal")
         ordinal_text = "" if ordinal is None else f"[第{int(ordinal)}个突破] "
         candle_count = int(item.get("chart_kline_count", 0))
-        requested_count = int(item.get("chart_requested_candles", 40))
+        requested_count = int(item.get("chart_requested_candles", 80))
         caption = (
             f"{ordinal_text}[新突破] {item['symbol']}\n"
             f"当前价：{item['current_price']:g}\n"

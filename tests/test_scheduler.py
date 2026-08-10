@@ -207,12 +207,12 @@ def test_new_breakout_sends_one_4h_chart_including_current_kline(tmp_path) -> No
 
     monitor.check_prices()
 
-    assert exchange.kline_calls == [("BTC-USDT-SWAP", "4h", 40)]
+    assert exchange.kline_calls == [("BTC-USDT-SWAP", "4h", 80)]
     assert exchange.recent_kline_include_incomplete_calls == [True]
     assert len(notifier.photos) == 1
     assert notifier.photos[0][0][0] == "BTC-USDT-SWAP"
     assert notifier.photos[0][0][1] > 0
-    assert notifier.photos[0][0][2] == 40
+    assert notifier.photos[0][0][2] == 80
 
 
 def test_photo_notification_failure_is_recorded_but_marks_notified(tmp_path) -> None:
@@ -231,7 +231,7 @@ def test_photo_notification_failure_is_recorded_but_marks_notified(tmp_path) -> 
     assert len(notifier.photos) == 1
     assert notifier.photos[0][0][0] == "BTC-USDT-SWAP"
     assert notifier.photos[0][0][1] > 0
-    assert notifier.photos[0][0][2] == 40
+    assert notifier.photos[0][0][2] == 80
     assert monitor.state is not None
     assert monitor.state.symbols["BTC-USDT-SWAP"].notified is True
 

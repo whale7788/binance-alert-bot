@@ -35,7 +35,7 @@ def render_breakout_chart(
     threshold: float,
     breakout_price: float,
     breakout_time: datetime,
-    requested_candles: int = 40,
+    requested_candles: int = 80,
 ) -> bytes:
     """Render a single-symbol OHLC chart and return it as PNG bytes."""
     if not klines:

@@ -41,7 +41,7 @@ def test_example_config_loads_with_telegram_environment(monkeypatch, tmp_path) -
     assert config.five_minute_drop_check_interval_minutes == 5
     assert config.breakout_chart_enabled is True
     assert config.breakout_chart_interval == "4h"
-    assert config.breakout_chart_candles == 40
+    assert config.breakout_chart_candles == 80
     assert config.breakout_chart_include_incomplete is True
     assert config.breakout_chart_max_workers == 6
 

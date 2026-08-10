@@ -94,7 +94,7 @@ class AppConfig(BaseModel):
     five_minute_drop_check_interval_minutes: int = Field(default=5, ge=1)
     breakout_chart_enabled: bool = True
     breakout_chart_interval: str = "4h"
-    breakout_chart_candles: int = Field(default=40, ge=1, le=1500)
+    breakout_chart_candles: int = Field(default=80, ge=1, le=1500)
     breakout_chart_include_incomplete: bool = True
     breakout_chart_max_workers: int = Field(default=6, ge=1, le=100)
     threshold_days: int = Field(default=10, ge=1)
